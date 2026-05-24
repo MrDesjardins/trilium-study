@@ -326,6 +326,17 @@ nav a {
 .lesson-actions form {
   margin: 0;
 }
+.lesson-audio-queue-form {
+  margin: 0;
+}
+.lesson-hero-actions {
+  display: grid;
+  gap: 10px;
+  justify-items: end;
+}
+.lesson-hero-actions form {
+  margin: 0;
+}
 .lesson-error-actions {
   display: flex;
   justify-content: flex-start;
@@ -782,6 +793,12 @@ button:hover { transform: translateY(-1px); }
   .lesson-top-side {
     width: 100%;
     justify-items: start;
+  }
+  .lesson-hero-actions {
+    justify-items: stretch;
+  }
+  .lesson-hero-actions button {
+    width: 100%;
   }
   .youtube-link {
     width: 100%;

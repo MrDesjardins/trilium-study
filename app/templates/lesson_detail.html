@@ -8,11 +8,26 @@
     <p class="muted" data-stage-text>{{ status.stage_label }} / {{ status.stage_state_display }}</p>
     <p class="muted" data-eta-text>{{ status.eta_label }}: {{ status.eta_text }}</p>
   </div>
-  <form method="post" action="/lessons/{{ lesson.id }}/run">
-    <label class="checkbox"><input type="checkbox" name="force_regenerate" value="true" /> Force regenerate</label>
-    <button type="submit">Run pipeline</button>
-  </form>
+  <div class="lesson-hero-actions">
+    <form method="post" action="/lessons/{{ lesson.id }}/run">
+      <label class="checkbox"><input type="checkbox" name="force_regenerate" value="true" /> Force regenerate</label>
+      <button type="submit">Run pipeline</button>
+    </form>
+    <form method="post" action="/lessons/{{ lesson.id }}/queue-audio" class="{% if not status.youtube_url %}hidden{% endif %}" data-audio-queue-form>
+      <button type="submit" class="secondary-button">Queue audio stream</button>
+    </form>
+  </div>
 </section>
+
+<aside class="flash-banner {% if flash_level == 'error' or not flash_message %}hidden{% endif %}" data-flash-banner>
+  <div class="error-banner-copy">
+    <p class="eyebrow">Status</p>
+    <h3>{{ flash_message or "Update" }}</h3>
+  </div>
+  <div class="error-banner-actions">
+    <button type="button" class="secondary-button" data-flash-dismiss>Dismiss</button>
+  </div>
+</aside>
 
 <section class="detail-grid">
   <article class="panel">
@@ -119,9 +134,11 @@
         youtubeLink.textContent = lesson.youtube_url;
         youtubeLink.classList.remove("hidden");
         youtubeMissing.classList.add("hidden");
+        document.querySelector("[data-audio-queue-form]")?.classList.remove("hidden");
       } else {
         youtubeLink?.classList.add("hidden");
         if (youtubeMissing) youtubeMissing.classList.remove("hidden");
+        document.querySelector("[data-audio-queue-form]")?.classList.add("hidden");
       }
       let errorActions = document.querySelector("[data-error-actions]");
       let errorTrigger = document.querySelector("[data-error-trigger]");
@@ -152,6 +169,10 @@
       }
       if (event.target.closest("[data-error-dismiss]") && errorBanner) {
         errorBanner.classList.add("hidden");
+        return;
+      }
+      if (event.target.closest("[data-flash-dismiss]")) {
+        document.querySelector("[data-flash-banner]")?.classList.add("hidden");
         return;
       }
       if (event.target.closest("[data-error-copy]") && errorBody) {

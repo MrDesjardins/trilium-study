@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     app_base_url: str = Field(default="http://127.0.0.1:8000", alias="APP_BASE_URL")
     app_host: str = Field(default="0.0.0.0", alias="APP_HOST")
     app_port: int = Field(default=8000, alias="APP_PORT")
+    audio_queue_url: str = Field(default="http://127.0.0.1:8000/queue/add", alias="AUDIO_QUEUE_URL")
     database_url: str = Field(default="sqlite:///./.state/trilium-study.db", alias="DATABASE_URL")
     workspace_dir: str = Field(default=".state/workspace", alias="WORKSPACE_DIR")
     log_dir: str = Field(default=".state/logs", alias="LOG_DIR")

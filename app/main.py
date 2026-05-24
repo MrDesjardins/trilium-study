@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
+import httpx
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -29,6 +30,12 @@ from app.pipeline import (
     schedule_flashcard_review,
 )
 from app.status import lesson_status_payload, queue_positions, runtime_checks
+
+
+async def enqueue_audio_stream(queue_url: str, youtube_url: str) -> None:
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        response = await client.post(queue_url, json={"youtube_video_id": youtube_url})
+        response.raise_for_status()
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -289,7 +296,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if lesson.current_job_id is not None:
             events = db.scalars(select(JobEvent).where(JobEvent.job_id == lesson.current_job_id).order_by(JobEvent.created_at.desc())).all()
         status = lesson_status_payload(db, lesson, queue_positions(db))
-        return templates.TemplateResponse(request, "lesson_detail.html", {"request": request, "lesson": lesson, "events": events, "status": status})
+        flash_level, flash_message = pop_flash(request)
+        response = templates.TemplateResponse(
+            request,
+            "lesson_detail.html",
+            {"request": request, "lesson": lesson, "events": events, "status": status, "flash_level": flash_level, "flash_message": flash_message},
+        )
+        if flash_message:
+            response.delete_cookie("flash_level")
+            response.delete_cookie("flash_message")
+        return response
 
     @app.get("/api/dashboard")
     async def dashboard_api(db: Session = Depends(get_db)):
@@ -357,6 +373,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/healthz")
     async def healthz():
         return {"ok": True}
+
+    @app.post("/lessons/{lesson_id}/queue-audio")
+    async def queue_audio_lesson(lesson_id: int, request: Request, db: Session = Depends(get_db)):
+        lesson = db.get(Lesson, lesson_id)
+        if lesson is None:
+            raise HTTPException(status_code=404, detail="Lesson not found")
+        redirect_url = request.headers.get("referer") or "/"
+        youtube_url = lesson.youtube_upload.video_url if lesson.youtube_upload else None
+        if not youtube_url:
+            return redirect_with_flash(redirect_url, f"{lesson.title} does not have a YouTube upload yet.", level="error")
+        try:
+            await enqueue_audio_stream(settings.audio_queue_url, youtube_url)
+        except httpx.HTTPStatusError as exc:
+            detail = exc.response.text.strip() or f"HTTP {exc.response.status_code}"
+            return redirect_with_flash(redirect_url, f"Audio queue rejected {lesson.title}: {detail}", level="error")
+        except httpx.HTTPError as exc:
+            return redirect_with_flash(redirect_url, f"Audio queue is unavailable for {lesson.title}: {exc}", level="error")
+        return redirect_with_flash(redirect_url, f"Queued {lesson.title} for the audio YouTube stream.")
 
     return app
 

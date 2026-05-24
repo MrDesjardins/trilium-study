@@ -49,6 +49,18 @@ APP_BASE_URL=http://10.0.0.181:8083
 
 The workstation `.env` remains the source template for the rest of the configuration.
 
+## Audio Stream Queue
+
+If the mini-pc also hosts the separate YouTube audio-stream queue service, this app can push uploaded lesson videos into that queue through a server-side lesson action.
+
+Default configuration:
+
+```bash
+AUDIO_QUEUE_URL=http://127.0.0.1:8000/queue/add
+```
+
+This is intended to stay loopback-only on the mini-pc. The Trilium Study app calls it server-to-server, so the queue API does not need to be exposed to the LAN.
+
 ## Kokoro
 
 Preferred configuration:
@@ -87,12 +99,8 @@ The script now:
 
 - rsyncs the repository to `pdesjardins@10.0.0.181:/home/pdesjardins/code/trilium-study`
 - renders and uploads a production `.env`
-- copies the full `.state` directory, including:
-  - `.state/trilium-study.db`
-  - `.state/youtube-token.json`
-  - `.state/client_secret_*.json`
-  - existing workspace artifacts
 - runs `scripts/install-prod.sh` remotely to reinstall deps, run migrations, and restart the service
+- preserves the mini-pc `.state` by default so production remains the source of truth for runtime data
 
 Typical deploy:
 
@@ -100,13 +108,22 @@ Typical deploy:
 ./deploy.sh
 ```
 
+This default does not overwrite the mini-pc SQLite DB, YouTube auth files, or generated artifacts.
+
 Optional knobs:
 
 ```bash
-COPY_STATE=0 ./deploy.sh
+COPY_STATE=1 ./deploy.sh
 REMOTE_APP_PORT=8083 ./deploy.sh
 REMOTE_APP_BASE_URL=http://10.0.0.181:8083 ./deploy.sh
 ```
+
+Use `COPY_STATE=1` only for intentional bootstrap or recovery when you want to replace the remote runtime state from this workstation. That copies the full `.state` directory, including:
+
+- `.state/trilium-study.db`
+- `.state/youtube-token.json`
+- `.state/client_secret_*.json`
+- existing workspace artifacts
 
 ## Passwordless Deploy Setup
 

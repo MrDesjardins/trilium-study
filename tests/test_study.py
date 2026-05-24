@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from app.config import Settings
 from app.db import Base, make_session_factory
 from app.main import create_app
-from app.models import Course, Flashcard, FlashcardReview, Lesson
+from app.models import Course, Flashcard, FlashcardReview, Lesson, YouTubeUpload
 
 
 def make_settings(tmp_path: Path) -> Settings:
@@ -152,3 +152,61 @@ def test_reset_flashcards_requeues_all_cards(tmp_path: Path):
             due_at = card.due_at if card.due_at.tzinfo else card.due_at.replace(tzinfo=timezone.utc)
             assert due_at <= datetime.now(timezone.utc)
         assert {card.id for card in cards} == {ids["due_card_id"], ids["future_card_id"], ids["failed_due_card_id"]}
+
+
+def test_queue_audio_lesson_posts_youtube_url(monkeypatch, tmp_path: Path):
+    settings = make_settings(tmp_path)
+    session_factory, engine = make_session_factory(settings)
+    Base.metadata.create_all(bind=engine)
+
+    with session_factory() as session:
+        course = Course(trilium_note_id="course", title="Course", parent_note_id=None, traversal_hash="course")
+        session.add(course)
+        session.flush()
+        lesson = Lesson(course_id=course.id, trilium_note_id="lesson-1", title="Lesson 1", parent_note_id="course", content_hash="hash")
+        session.add(lesson)
+        session.flush()
+        session.add(YouTubeUpload(lesson_id=lesson.id, video_id="abc123", video_url="https://www.youtube.com/watch?v=abc123"))
+        session.commit()
+        lesson_id = lesson.id
+
+    captured: dict[str, str] = {}
+
+    async def fake_enqueue(queue_url: str, youtube_url: str) -> None:
+        captured["queue_url"] = queue_url
+        captured["youtube_url"] = youtube_url
+
+    monkeypatch.setattr("app.main.enqueue_audio_stream", fake_enqueue)
+
+    app = create_app(settings)
+    with TestClient(app) as client:
+        response = client.post(f"/lessons/{lesson_id}/queue-audio", headers={"referer": "/lessons/1"}, follow_redirects=True)
+
+    assert response.status_code == 200
+    assert "Queued Lesson 1 for the audio YouTube stream." in response.text
+    assert captured == {
+        "queue_url": "http://127.0.0.1:8000/queue/add",
+        "youtube_url": "https://www.youtube.com/watch?v=abc123",
+    }
+
+
+def test_queue_audio_lesson_requires_youtube_upload(tmp_path: Path):
+    settings = make_settings(tmp_path)
+    session_factory, engine = make_session_factory(settings)
+    Base.metadata.create_all(bind=engine)
+
+    with session_factory() as session:
+        course = Course(trilium_note_id="course", title="Course", parent_note_id=None, traversal_hash="course")
+        session.add(course)
+        session.flush()
+        lesson = Lesson(course_id=course.id, trilium_note_id="lesson-1", title="Lesson 1", parent_note_id="course", content_hash="hash")
+        session.add(lesson)
+        session.commit()
+        lesson_id = lesson.id
+
+    app = create_app(settings)
+    with TestClient(app) as client:
+        response = client.post(f"/lessons/{lesson_id}/queue-audio", headers={"referer": "/lessons/1"}, follow_redirects=True)
+
+    assert response.status_code == 200
+    assert "Lesson 1 does not have a YouTube upload yet." in response.text
