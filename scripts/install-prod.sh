@@ -3,6 +3,7 @@ set -euo pipefail
 
 APP_DIR="${APP_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 SERVICE_NAME="${SERVICE_NAME:-trilium-study.service}"
+export PATH="${HOME}/.local/bin:${PATH}"
 
 check_command() {
   local name="$1"
@@ -12,24 +13,91 @@ check_command() {
   fi
 }
 
-ensure_systemd_user_available() {
-  export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
-  if systemctl --user show-environment >/dev/null 2>&1; then
-    return
-  fi
-  if command -v loginctl >/dev/null 2>&1 && command -v sudo >/dev/null 2>&1; then
-    sudo loginctl enable-linger "$USER" >/dev/null 2>&1 || true
-  fi
-  if ! systemctl --user show-environment >/dev/null 2>&1; then
-    echo "systemd user services are not available for $USER. Ensure lingering is enabled and the user manager is running." >&2
+require_file() {
+  local path="$1"
+  local description="$2"
+  if [[ ! -f "${path}" ]]; then
+    echo "Missing ${description}: ${path}" >&2
     exit 1
   fi
 }
 
-if ! command -v uv >/dev/null 2>&1; then
-  echo "uv is required but not installed" >&2
-  exit 1
-fi
+ensure_systemd_user_available() {
+  export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+  if systemctl --user show-environment >/dev/null 2>&1; then
+    :
+  elif command -v loginctl >/dev/null 2>&1 && command -v sudo >/dev/null 2>&1; then
+    sudo -n loginctl enable-linger "$USER" >/dev/null 2>&1 || true
+    if ! systemctl --user show-environment >/dev/null 2>&1; then
+      echo "systemd user services are not available for $USER. Ensure lingering is enabled and the user manager is running." >&2
+      exit 1
+    fi
+  else
+    echo "systemd user services are not available for $USER. Ensure lingering is enabled and the user manager is running." >&2
+    exit 1
+  fi
+
+  if command -v loginctl >/dev/null 2>&1; then
+    local linger_state
+    linger_state="$(loginctl show-user "$USER" -p Linger 2>/dev/null || true)"
+    if [[ "${linger_state}" != "Linger=yes" ]]; then
+      if command -v sudo >/dev/null 2>&1; then
+        sudo -n loginctl enable-linger "$USER" >/dev/null 2>&1 || true
+        linger_state="$(loginctl show-user "$USER" -p Linger 2>/dev/null || true)"
+      fi
+      if [[ "${linger_state}" != "Linger=yes" ]]; then
+        echo "Persistent user services require loginctl linger for $USER. Run: sudo loginctl enable-linger $USER" >&2
+        exit 1
+      fi
+    fi
+  fi
+}
+
+ensure_uv() {
+  if command -v uv >/dev/null 2>&1; then
+    return
+  fi
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "uv is required and curl is not installed to bootstrap it" >&2
+    exit 1
+  fi
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  if ! command -v uv >/dev/null 2>&1; then
+    echo "uv installation completed but uv is still not on PATH" >&2
+    exit 1
+  fi
+}
+
+verify_env_file() {
+  require_file "${APP_DIR}/.env" ".env"
+
+  local app_port app_base_url app_host database_url youtube_token_file youtube_client_secrets
+  app_port="$(awk -F= '/^APP_PORT=/{print $2}' "${APP_DIR}/.env" | tail -n 1)"
+  app_base_url="$(awk -F= '/^APP_BASE_URL=/{sub(/^APP_BASE_URL=/,""); print}' "${APP_DIR}/.env" | tail -n 1)"
+  app_host="$(awk -F= '/^APP_HOST=/{print $2}' "${APP_DIR}/.env" | tail -n 1)"
+  database_url="$(awk -F= '/^DATABASE_URL=/{sub(/^DATABASE_URL=/,""); print}' "${APP_DIR}/.env" | tail -n 1)"
+  youtube_token_file="$(awk -F= '/^YOUTUBE_TOKEN_FILE=/{sub(/^YOUTUBE_TOKEN_FILE=/,""); print}' "${APP_DIR}/.env" | tail -n 1)"
+  youtube_client_secrets="$(awk -F= '/^YOUTUBE_CLIENT_SECRETS=/{sub(/^YOUTUBE_CLIENT_SECRETS=/,""); print}' "${APP_DIR}/.env" | tail -n 1)"
+
+  if [[ -z "${app_port}" || -z "${app_base_url}" || -z "${app_host}" ]]; then
+    echo "APP_HOST, APP_PORT, and APP_BASE_URL must be set in ${APP_DIR}/.env" >&2
+    exit 1
+  fi
+  if [[ "${database_url}" != "sqlite:///./.state/trilium-study.db" ]]; then
+    echo "DATABASE_URL must remain sqlite:///./.state/trilium-study.db for production installs" >&2
+    exit 1
+  fi
+  if [[ -n "${youtube_token_file}" && ! -f "${APP_DIR}/${youtube_token_file}" ]]; then
+    echo "Missing YouTube token file referenced by .env: ${APP_DIR}/${youtube_token_file}" >&2
+    exit 1
+  fi
+  if [[ -n "${youtube_client_secrets}" && ! -f "${APP_DIR}/${youtube_client_secrets}" ]]; then
+    echo "Missing YouTube client secrets referenced by .env: ${APP_DIR}/${youtube_client_secrets}" >&2
+    exit 1
+  fi
+}
+
+ensure_uv
 
 if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v espeak-ng >/dev/null 2>&1; then
   if command -v sudo >/dev/null 2>&1 && command -v apt-get >/dev/null 2>&1; then
@@ -41,13 +109,9 @@ if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v espeak-ng >/dev/null 2>&1
   fi
 fi
 
-mkdir -p "${APP_DIR}/.state/logs" "${APP_DIR}/.state/workspace"
-
 cd "${APP_DIR}"
-if [[ ! -f "${APP_DIR}/.env" ]]; then
-  echo "Missing ${APP_DIR}/.env" >&2
-  exit 1
-fi
+verify_env_file
+mkdir -p "${APP_DIR}/.state/logs" "${APP_DIR}/.state/workspace"
 
 uv venv .venv
 . .venv/bin/activate
@@ -64,6 +128,7 @@ PY
 check_command ffmpeg
 check_command espeak-ng
 check_command systemctl
+check_command rsync
 ensure_systemd_user_available
 
 mkdir -p "${HOME}/.config/systemd/user"

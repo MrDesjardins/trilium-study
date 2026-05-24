@@ -1,6 +1,6 @@
 # trilium-study
 
-Single-user FastAPI service that treats a configured Trilium parent note as a course, each direct child as a lesson, validates and expands lesson notes into detailed study scripts, and builds flashcards, narration, MP4s, and unlisted YouTube upload records with durable SQLite-backed job state.
+Single-user FastAPI service that treats a configured Trilium parent note as a course, each direct child as a lesson, cleans noisy HTML-heavy lesson content into study-friendly source text, validates and expands lesson notes into detailed study scripts with narration-length safeguards, and builds flashcards, narration, MP4s, and unlisted YouTube upload records with durable SQLite-backed job state.
 
 ## Local setup
 
@@ -74,13 +74,17 @@ KOKORO_COMMAND=".venv/bin/python -m app.kokoro_cli --input {input} --output {out
 - `app/kokoro_cli.py`: repo-native Kokoro WAV generator
 - `app/youtube_auth.py`: one-time OAuth token bootstrap for YouTube uploads
 - `app/models.py`: SQLite schema for courses, lessons, artifacts, jobs, uploads, and flashcards
-- `deploy.sh`: rsync + systemd deployment for the mini-pc
+- `deploy.sh`: renders production `.env`, copies `.state`, and runs systemd deployment for the mini-pc
 
 ## Tests
 
 ```bash
 uv run pytest
 ```
+
+## Deployment
+
+For the mini-pc deployment flow, one-time host setup, and future update steps, see [docs/OPERATIONS.md](/home/miste/code/trilium-study/docs/OPERATIONS.md).
 
 ## Database
 

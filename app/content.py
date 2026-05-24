@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+from html import unescape
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -112,6 +114,7 @@ class LessonCollector:
 
     def _normalize_tree(self, node: dict[str, Any]) -> str:
         blocks: list[str] = []
+        seen_blocks: set[str] = set()
 
         def visit(current: dict[str, Any], depth: int) -> None:
             note = TriliumNote(
@@ -125,7 +128,12 @@ class LessonCollector:
                 header = "#" * min(depth + 1, 6)
                 blocks.append(f"{header} {note.title}".strip())
                 if note.content:
-                    blocks.append(note.content.strip())
+                    cleaned = clean_study_text(note.content)
+                    if cleaned:
+                        signature = re.sub(r"\s+", " ", cleaned).strip().lower()
+                        if signature and signature not in seen_blocks:
+                            blocks.append(cleaned)
+                            seen_blocks.add(signature)
             for child in current.get("children", []):
                 visit(child, depth + 1)
 
@@ -145,3 +153,30 @@ class LessonCollector:
             ensure_ascii=True,
             indent=2,
         )
+
+
+BLOCK_TAG_REPLACEMENTS = (
+    (r"<br\s*/?>", "\n"),
+    (r"</p\s*>", "\n\n"),
+    (r"</div\s*>", "\n\n"),
+    (r"</li\s*>", "\n"),
+    (r"</h[1-6]\s*>", "\n\n"),
+    (r"</tr\s*>", "\n"),
+    (r"</table\s*>", "\n\n"),
+    (r"<li[^>]*>", "- "),
+    (r"<hr[^>]*>", "\n\n"),
+)
+
+
+def clean_study_text(text: str) -> str:
+    cleaned = unescape(text)
+    for pattern, replacement in BLOCK_TAG_REPLACEMENTS:
+        cleaned = re.sub(pattern, replacement, cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"<[^>]+>", " ", cleaned)
+    cleaned = re.sub(r"https?://\S+", " ", cleaned)
+    cleaned = cleaned.replace("\xa0", " ")
+    cleaned = re.sub(r"\n[ \t]+", "\n", cleaned)
+    cleaned = re.sub(r"[ \t]+\n", "\n", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    return cleaned.strip()

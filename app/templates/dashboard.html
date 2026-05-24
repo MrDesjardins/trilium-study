@@ -81,7 +81,7 @@
     </div>
     <div class="lesson-status-block" data-lesson-id="{{ lesson.id }}">
       <p class="muted" data-stage-text>Stage: {{ status.stage_label if status else (lesson.stage or "pending") }}</p>
-      <p class="muted" data-eta-text>ETA: {{ status.eta_text if status else "waiting" }}</p>
+      <p class="muted" data-eta-text>{{ status.eta_label if status else "ETA" }}: {{ status.eta_text if status else "waiting" }}</p>
       <p class="muted" data-queue-text>{% if status and status.queue_position %}Queue position: {{ status.queue_position }}{% else %}Queue position: active or not queued{% endif %}</p>
       <div class="progress-track">
         <div class="progress-fill" style="width: {{ status.progress_percent if status else 0 }}%" data-progress-fill></div>
@@ -118,7 +118,11 @@
           <span class="lesson-detail-label">Open lesson details</span>
           <span class="lesson-detail-meta">Artifacts, script, events</span>
         </span>
-        <span class="lesson-detail-arrow" aria-hidden="true">-></span>
+        <span class="lesson-detail-arrow" aria-hidden="true">
+          <svg viewBox="0 0 24 24">
+            <path d="M9 6l6 6-6 6" />
+          </svg>
+        </span>
       </a>
     </div>
   </article>
@@ -203,7 +207,7 @@
           pill.className = `stage ${lesson.stage_state}`;
         }
         root.querySelector("[data-stage-text]").textContent = `Stage: ${lesson.stage_label}`;
-        root.querySelector("[data-eta-text]").textContent = `ETA: ${lesson.eta_text}`;
+        root.querySelector("[data-eta-text]").textContent = `${lesson.eta_label}: ${lesson.eta_text}`;
         root.querySelector("[data-queue-text]").textContent = lesson.queue_position ? `Queue position: ${lesson.queue_position}` : "Queue position: active or not queued";
         root.querySelector("[data-progress-fill]").style.width = `${lesson.progress_percent}%`;
         root.querySelector("[data-stage-list]").innerHTML = renderStageList(lesson.steps);

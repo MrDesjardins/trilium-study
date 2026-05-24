@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
-from app.content import LessonCollector
+from app.content import LessonCollector, clean_study_text
 
 
 def test_normalize_tree_collects_nested_textual_content():
@@ -74,3 +74,38 @@ def test_walk_note_uses_note_children_not_branch_lookup():
 
     assert tree["note_id"] == "lesson-a"
     assert [child["note_id"] for child in tree["children"]] == ["child-a"]
+
+
+def test_clean_study_text_strips_html_and_urls():
+    cleaned = clean_study_text("<h2>Epistemology</h2><p>Study of knowledge</p><p>See https://example.com</p><ul><li>Truth</li><li>Belief</li></ul>")
+
+    assert "<h2>" not in cleaned
+    assert "https://example.com" not in cleaned
+    assert "Epistemology" in cleaned
+    assert "- Truth" in cleaned
+    assert "- Belief" in cleaned
+
+
+def test_normalize_tree_deduplicates_identical_cleaned_blocks():
+    collector = LessonCollector(trilium_client=None)  # type: ignore[arg-type]
+    tree = {
+        "note_id": "root",
+        "title": "Lesson 1",
+        "type": "text",
+        "mime": "text/html",
+        "content": "<p>Repeated idea</p>",
+        "children": [
+            {
+                "note_id": "child",
+                "title": "Child",
+                "type": "text",
+                "mime": "text/html",
+                "content": "<div>Repeated idea</div>",
+                "children": [],
+            }
+        ],
+    }
+
+    normalized = collector._normalize_tree(tree)
+
+    assert normalized.count("Repeated idea") == 1

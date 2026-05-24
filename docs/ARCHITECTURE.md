@@ -19,13 +19,13 @@ The application persists state in SQLite and stores staged artifacts on disk und
 - `app/main.py`
   Server-rendered FastAPI UI, JSON endpoints, polling status APIs, flashcard study queue stats, browse/reset study actions, app bootstrap, and background runner startup.
 - `app/content.py`
-  Trilium ETAPI client plus recursive lesson collection and normalized text assembly.
+  Trilium ETAPI client plus recursive lesson collection and normalized text assembly, including HTML cleanup and duplicate-block suppression so downstream script generation sees cleaner study material.
 - `app/jobs.py`
   Single-worker durable job runner for course sync and per-lesson pipeline execution, including queued-state handling, duplicate-job protection, failed-stage resumability, and bounded automatic retries for lesson jobs.
 - `app/status.py`
-  Runtime dependency checks, queue position calculation, stage progress modeling, and ETA helpers for the UI.
+  Runtime dependency checks, queue position calculation, stage progress modeling, ETA helpers, and generated-script length metadata for the UI.
 - `app/pipeline.py`
-  LLM-backed script validation and expansion, flashcard generation, Kokoro TTS integration, ffmpeg rendering sized to narration duration, YouTube upload integration, and SM-2 review scheduling.
+  LLM-backed script validation and expansion with minimum narration-length gates based on cleaned source text, including a looser middle-band floor so study-worthy 8-11 minute scripts are not rejected unnecessarily, comprehension-first prompting that pushes for examples and alternate explanations when needed, multi-attempt in-stage script retries that escalate to section-by-section teaching requirements before the lesson job fails, flashcard generation, Kokoro TTS integration, ffmpeg rendering sized to narration duration, YouTube upload integration, and SM-2 review scheduling.
 - `app/models.py`
   SQLAlchemy schema for courses, lessons, artifacts, jobs, job events, uploads, flashcards, and reviews.
 - `app/migrate.py` and `migrations/`
@@ -34,6 +34,8 @@ The application persists state in SQLite and stores staged artifacts on disk und
   Repo-native CLI wrapper for Kokoro WAV synthesis when an explicit command path is desired.
 - `app/youtube_auth.py`
   One-time OAuth bootstrap that generates the persisted YouTube token file.
+- `deploy.sh` and `scripts/install-prod.sh`
+  Workstation-to-mini-pc deployment path that renders a production `.env`, copies SQLite/runtime state, reinstalls dependencies, runs migrations, and restarts the user service.
 
 ## Persistence Model
 
@@ -52,6 +54,7 @@ Disk artifacts store:
 - raw note snapshots
 - normalized lesson text
 - generated scripts
+- script provenance including source/script word counts and estimated narration length
 - flashcard JSON
 - audio files
 - video files

@@ -6,7 +6,7 @@
     <p class="eyebrow">Lesson</p>
     <h2>{{ lesson.title }}</h2>
     <p class="muted" data-stage-text>{{ status.stage_label }} / {{ status.stage_state_display }}</p>
-    <p class="muted" data-eta-text>ETA: {{ status.eta_text }}</p>
+    <p class="muted" data-eta-text>{{ status.eta_label }}: {{ status.eta_text }}</p>
   </div>
   <form method="post" action="/lessons/{{ lesson.id }}/run">
     <label class="checkbox"><input type="checkbox" name="force_regenerate" value="true" /> Force regenerate</label>
@@ -44,6 +44,11 @@
     <ul class="artifact-list">
       <li>Raw snapshot: {{ lesson.raw_snapshot_path or "missing" }}</li>
       <li>Normalized content: {{ lesson.normalized_content_path or "missing" }}</li>
+      <li>Normalized words: {{ status.normalized_word_count or "unknown" }}</li>
+      <li>Script words: {{ status.script_word_count or "unknown" }}</li>
+      <li>Script minimum target: {{ status.script_minimum_words or "unknown" }}</li>
+      <li>Estimated narration: {% if status.estimated_narration_minutes %}{{ "%.1f"|format(status.estimated_narration_minutes) }} minutes{% else %}unknown{% endif %}</li>
+      <li>Actual runtime: {% if status.actual_duration_seconds %}{{ status.eta_text }}{% else %}unknown{% endif %}</li>
       <li>Audio: {{ lesson.audio_path or "missing" }}</li>
       <li>Video: {{ lesson.video_path or "missing" }}</li>
       <li data-youtube-item>
@@ -104,7 +109,7 @@
       if (!response.ok) return;
       const lesson = await response.json();
       document.querySelector("[data-stage-text]").textContent = `${lesson.stage_label} / ${lesson.stage_state_display}`;
-      document.querySelector("[data-eta-text]").textContent = `ETA: ${lesson.eta_text}`;
+      document.querySelector("[data-eta-text]").textContent = `${lesson.eta_label}: ${lesson.eta_text}`;
       document.querySelector("[data-progress-fill]").style.width = `${lesson.progress_percent}%`;
       document.querySelector("[data-stage-list]").innerHTML = renderLessonSteps(lesson.steps);
       const youtubeLink = document.querySelector("[data-youtube-link]");

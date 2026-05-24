@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import Settings
+from app.content import clean_study_text
 from app.models import Flashcard, FlashcardReview, Lesson, LessonArtifact, YouTubeUpload
 
 
@@ -91,20 +92,29 @@ class YouTubePublisher(Protocol):
 
 
 class DefaultScriptGenerator:
+    max_generation_attempts = 4
+
     def __init__(self, settings: Settings):
         self.settings = settings
         self.client = OpenAI(api_key=settings.openai_api_key) if settings.openai_api_key else None
 
     def build_prompt(self, lesson_title: str, normalized_text: str) -> tuple[str, str]:
+        cleaned_source_text = cleaned_source_material(normalized_text)
+        normalized_word_count = script_word_count(cleaned_source_text)
+        minimum_words = minimum_script_words(normalized_word_count)
+        quality_floor_minutes = estimate_narration_minutes(minimum_words)
+        target_minutes = target_duration_minutes(normalized_word_count)
         system = (
             "You are a careful teaching editor and factual validator for study notes. "
             "First, validate the source notes for factual mistakes, misleading shortcuts, missing prerequisites, "
             "and places where the wording would confuse a beginner. "
             "Second, produce a detailed teaching script that preserves the source meaning while correcting errors, "
             "filling only bounded gaps required for accurate understanding, and explaining ideas in simple language. "
-            "The script must be beginner-friendly, specific, and concrete. Define terms, unpack claims, explain why each idea matters, "
-            "and include short examples or comparisons when they make the concept easier to understand. "
-            "Do not pad with fluff. Do not invent controversial claims. If a source claim looks doubtful, correct it cautiously. "
+            "The script must be beginner-friendly, specific, concrete, and polished enough to study from directly. "
+            "Define terms, unpack claims, explain why each idea matters, and use examples, analogies, comparisons, and short restatements generously whenever they improve comprehension. "
+            "It is acceptable to repeat an idea in clearer words, approach it from another angle, or add another example if that helps the learner understand and review the material. "
+            "Do not compress a content-rich lesson into a short summary. Treat the source as the backbone of a spoken lesson and walk through the major ideas thoroughly so the listener could learn from the script alone. "
+            "Do not pad with fluff or motivational filler. Do not invent controversial claims. If a source claim looks doubtful, correct it cautiously. "
             "Any material not directly present in the notes but added to make the lesson accurate or understandable must be tagged inline with [Added context]."
         )
         user = (
@@ -117,12 +127,25 @@ class DefaultScriptGenerator:
             "- corrected_or_clarified_points: a list of important corrections or clarifications you made\n"
             "- filled_gap_topics: a list of small missing topics you added so the lesson is understandable\n\n"
             "Script requirements:\n"
+            "- organize the script as a real lesson with a short introduction, section-by-section teaching through the source, and a closing recap\n"
             "- teach the material step by step in plain English\n"
             "- prefer short paragraphs and explicit definitions\n"
             "- make the explanation more detailed than the source notes when the notes are terse\n"
             "- explain assumptions and transitions instead of jumping between ideas\n"
+            "- for each major point, include enough explanation, examples, and restatements that the listener can understand it without seeing the original notes\n"
+            "- optimize for study quality, comprehension, and review value rather than brevity\n"
+            "- it is good to revisit a difficult idea from two angles if that makes it easier to learn\n"
+            "- for abstract or difficult claims, add at least one concrete example, analogy, or comparison unless the notes already provide one\n"
+            "- when a section introduces several ideas, explain them one by one instead of collapsing them into a dense paragraph\n"
             "- if the notes are incomplete, add only the minimum accurate context needed and mark it [Added context]\n\n"
-            f"{normalized_text}"
+            "Length requirements:\n"
+            f"- the source contains about {normalized_word_count} words\n"
+            f"- produce enough explanation to comfortably study from the notes, which usually means at least about {minimum_words} words for a lesson of this size\n"
+            f"- aim for roughly {target_minutes[0]} to {target_minutes[1]} minutes of spoken explanation when the source has enough substance\n"
+            f"- anything below about {quality_floor_minutes:.1f} minutes will usually be too compressed for this lesson unless the source is unusually repetitive\n"
+            "- the lower bound is a quality floor, not the true goal; prefer a richer, easier-to-learn script when the material benefits from more explanation\n"
+            "- retain and explain all major source sections instead of replacing them with a brief overview\n\n"
+            f"{cleaned_source_text}"
         )
         return system, user
 
@@ -132,29 +155,86 @@ class DefaultScriptGenerator:
                 "OPENAI_API_KEY is required for validated script generation. Configure it in .env so notes can be checked and expanded safely."
             )
 
-        system, user = self.build_prompt(lesson_title, normalized_text)
-        response = self.client.responses.parse(
-            model=self.settings.openai_model,
-            input=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            text_format=ScriptResponsePayload,
-        )
-        payload = response.output_parsed
-        if payload is None:
-            raise RuntimeError("OpenAI returned no parsed script payload.")
-        return GeneratedScript(
-            script_text=payload.script_text,
-            provenance={
-                "mode": "openai",
-                "added_context_notes": payload.added_context_notes,
-                "validation_summary": payload.validation_summary,
-                "corrected_or_clarified_points": payload.corrected_or_clarified_points,
-                "filled_gap_topics": payload.filled_gap_topics,
-                "model": self.settings.openai_model,
-            },
-        )
+        cleaned_source_text = cleaned_source_material(normalized_text)
+        system, base_user = self.build_prompt(lesson_title, cleaned_source_text)
+        normalized_word_count = script_word_count(cleaned_source_text)
+        minimum_words = minimum_script_words(normalized_word_count)
+        target_minutes = target_duration_minutes(normalized_word_count)
+        last_error = "OpenAI returned no parsed script payload."
+        previous_word_count: int | None = None
+
+        for attempt in range(1, self.max_generation_attempts + 1):
+            user = base_user
+            if attempt > 1:
+                previous_text = f"Previous draft was about {previous_word_count} words. " if previous_word_count else ""
+                user += (
+                    f"\n{previous_text}Previous attempt was too short for the lesson size. "
+                    f"Expand the script so it clearly teaches the full lesson and reaches at least about {minimum_words} words unless the source is genuinely repetitive. "
+                    "For each important point, add more concrete examples, clearer definitions, comparisons, and alternate phrasings so the lesson becomes easier to study from. "
+                    "Do not merely restate headings or compress multiple sections into one paragraph. "
+                    "Lean toward richer explanation and review-friendly repetition rather than a polished short summary.\n"
+                )
+            if attempt >= 2:
+                user += (
+                    "Coverage requirements for this retry:\n"
+                    "- preserve the source order and teach each major section separately\n"
+                    "- include at least one comprehension aid per major section: an example, analogy, comparison, or simpler restatement\n"
+                    "- if a concept is highly abstract, explain it once formally and once in simpler everyday language\n"
+                    "- add brief recap sentences at the end of major sections so the learner can review while listening\n"
+                )
+            if attempt >= 3:
+                user += (
+                    "Make the script feel like study material, not a summary:\n"
+                    "- slow down the explanation of difficult ideas\n"
+                    "- turn compact claims into short teachable sequences of 2 to 4 sentences\n"
+                    "- prefer extra clarification over concision whenever there is a tradeoff\n"
+                )
+            if attempt >= 4:
+                user += (
+                    "Final retry requirement:\n"
+                    "- be intentionally expansive where needed for comprehension\n"
+                    "- if the lesson is still under target, add another example or alternate explanation for each major source section rather than shortening the whole lesson\n"
+                )
+            response = self.client.responses.parse(
+                model=self.settings.openai_model,
+                input=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                text_format=ScriptResponsePayload,
+            )
+            payload = response.output_parsed
+            if payload is None:
+                continue
+            generated_word_count = script_word_count(payload.script_text)
+            previous_word_count = generated_word_count
+            estimated_minutes = estimate_narration_minutes(generated_word_count)
+            if not script_meets_length_target(normalized_word_count, generated_word_count):
+                last_error = (
+                    "Generated script was too compressed for the lesson size "
+                    f"({generated_word_count} words from about {normalized_word_count} source words, "
+                    f"estimated {estimated_minutes:.1f} minutes; target about {target_minutes[0]}-{target_minutes[1]} minutes)."
+                )
+                continue
+            return GeneratedScript(
+                script_text=payload.script_text,
+                provenance={
+                    "mode": "openai",
+                    "added_context_notes": payload.added_context_notes,
+                    "validation_summary": payload.validation_summary,
+                    "corrected_or_clarified_points": payload.corrected_or_clarified_points,
+                    "filled_gap_topics": payload.filled_gap_topics,
+                    "model": self.settings.openai_model,
+                    "normalized_word_count": normalized_word_count,
+                    "normalized_word_count_raw": script_word_count(normalized_text),
+                    "script_word_count": generated_word_count,
+                    "script_minimum_words": minimum_words,
+                    "estimated_narration_minutes": round(estimated_minutes, 2),
+                    "target_duration_minutes": list(target_minutes),
+                    "generation_attempts": attempt,
+                },
+            )
+        raise RuntimeError(last_error)
 
 
 class DefaultFlashcardGenerator:
@@ -196,7 +276,7 @@ class CommandTTSGenerator:
         script_file.write_text(script_text, encoding="utf-8")
         command = self.settings.kokoro_command.format(input=script_file, output=output_path)
         subprocess.run(command, shell=True, check=True)
-        return {"mode": "kokoro", "path": str(output_path)}
+        return {"mode": "kokoro", "path": str(output_path), "duration_seconds": media_duration_seconds(output_path)}
 
     def _generate_builtin(self, lesson: Lesson, script_text: str, output_path: Path) -> dict[str, Any]:
         try:
@@ -228,6 +308,7 @@ class CommandTTSGenerator:
         return {
             "mode": "kokoro-python",
             "path": str(output_path),
+            "duration_seconds": round(len(audio_array) / 24000, 3),
             "voice": self.settings.kokoro_voice,
             "lang_code": self.settings.kokoro_lang_code,
             "speed": self.settings.kokoro_speed,
@@ -241,7 +322,7 @@ class FfmpegVideoRenderer:
 
     def render(self, lesson: Lesson, audio_path: Path, output_path: Path) -> dict[str, Any]:
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        duration_seconds = self._audio_duration_seconds(audio_path)
+        duration_seconds = media_duration_seconds(audio_path)
         command = [
             "ffmpeg",
             "-y",
@@ -268,35 +349,35 @@ class FfmpegVideoRenderer:
         return {"mode": "ffmpeg", "path": str(output_path), "duration_seconds": duration_seconds}
 
     @staticmethod
-    def _audio_duration_seconds(audio_path: Path) -> float:
-        command = [
-            "ffprobe",
-            "-v",
-            "error",
-            "-show_entries",
-            "format=duration",
-            "-of",
-            "default=noprint_wrappers=1:nokey=1",
-            str(audio_path),
-        ]
-        try:
-            result = subprocess.run(command, check=True, capture_output=True, text=True)
-        except subprocess.CalledProcessError as exc:
-            stderr = (exc.stderr or "").strip()
-            detail = stderr or str(exc)
-            raise RuntimeError(f"ffprobe could not determine audio duration for {audio_path}: {detail}") from exc
-
-        try:
-            duration = float(result.stdout.strip())
-        except ValueError as exc:
-            raise RuntimeError(f"ffprobe returned an invalid audio duration for {audio_path}: {result.stdout!r}") from exc
-        if duration <= 0:
-            raise RuntimeError(f"Audio duration must be positive for {audio_path}, got {duration}")
-        return duration
-
-    @staticmethod
     def _escape(value: str) -> str:
         return value.replace("'", r"\'").replace(":", r"\:")
+
+
+def media_duration_seconds(path: Path) -> float:
+    command = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        str(path),
+    ]
+    try:
+        result = subprocess.run(command, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as exc:
+        stderr = (exc.stderr or "").strip()
+        detail = stderr or str(exc)
+        raise RuntimeError(f"ffprobe could not determine media duration for {path}: {detail}") from exc
+
+    try:
+        duration = float(result.stdout.strip())
+    except ValueError as exc:
+        raise RuntimeError(f"ffprobe returned an invalid media duration for {path}: {result.stdout!r}") from exc
+    if duration <= 0:
+        raise RuntimeError(f"Media duration must be positive for {path}, got {duration}")
+    return duration
 
 
 class YouTubeApiPublisher:
@@ -492,3 +573,45 @@ def upsert_youtube_upload(session: Session, lesson: Lesson, upload: GeneratedUpl
 
 def default_kokoro_command() -> str:
     return f"{sys.executable} -m app.kokoro_cli --input {{input}} --output {{output}}"
+
+
+def script_word_count(text: str) -> int:
+    return len(re.findall(r"\b[\w'-]+\b", text))
+
+
+def cleaned_source_material(text: str) -> str:
+    return clean_study_text(text)
+
+
+def estimate_narration_minutes(word_count: int) -> float:
+    if word_count <= 0:
+        return 0.0
+    return word_count / 145.0
+
+
+def target_duration_minutes(normalized_word_count: int) -> tuple[int, int]:
+    if normalized_word_count >= 7000:
+        return (8, 25)
+    if normalized_word_count >= 3500:
+        return (8, 18)
+    if normalized_word_count >= 1800:
+        return (7, 14)
+    if normalized_word_count >= 900:
+        return (5, 10)
+    return (4, 8)
+
+
+def minimum_script_words(normalized_word_count: int) -> int:
+    if normalized_word_count < 400:
+        return max(250, round(normalized_word_count * 0.65))
+    if normalized_word_count < 1000:
+        return max(500, round(normalized_word_count * 0.65))
+    if normalized_word_count < 2500:
+        return max(700, round(normalized_word_count * 0.48))
+    if normalized_word_count < 5000:
+        return max(950, round(normalized_word_count * 0.30))
+    return min(1800, max(1200, round(normalized_word_count * 0.16)))
+
+
+def script_meets_length_target(normalized_word_count: int, generated_word_count: int) -> bool:
+    return generated_word_count >= minimum_script_words(normalized_word_count)

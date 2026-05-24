@@ -98,8 +98,8 @@
 
   {% if review_mode %}
   <form class="review-actions" method="post" action="/study/{{ flashcard.id }}/review" data-study-form>
-    <button type="submit" name="result" value="again" class="review-button review-again">Did not</button>
-    <button type="submit" name="result" value="pass" class="review-button review-pass" data-win-button>I got it</button>
+    <button type="submit" name="result" value="again" class="review-button review-again"><span class="review-button-label">Wrong</span></button>
+    <button type="submit" name="result" value="pass" class="review-button review-pass" data-win-button><span class="review-button-label">Good</span></button>
   </form>
   <script>
     (() => {
