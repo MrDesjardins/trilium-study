@@ -1,0 +1,14 @@
+[Unit]
+Description=Trilium Study Platform
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/pdesjardins/code/trilium-study
+EnvironmentFile=/home/pdesjardins/code/trilium-study/.env
+ExecStart=/home/pdesjardins/code/trilium-study/.venv/bin/python -m app.serve
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

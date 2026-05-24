@@ -1,0 +1,162 @@
+{% extends "base.html" %}
+{% block title %}{{ lesson.title }}{% endblock %}
+{% block content %}
+<section class="panel hero">
+  <div>
+    <p class="eyebrow">Lesson</p>
+    <h2>{{ lesson.title }}</h2>
+    <p class="muted" data-stage-text>{{ status.stage_label }} / {{ status.stage_state_display }}</p>
+    <p class="muted" data-eta-text>ETA: {{ status.eta_text }}</p>
+  </div>
+  <form method="post" action="/lessons/{{ lesson.id }}/run">
+    <label class="checkbox"><input type="checkbox" name="force_regenerate" value="true" /> Force regenerate</label>
+    <button type="submit">Run pipeline</button>
+  </form>
+</section>
+
+<section class="detail-grid">
+  <article class="panel">
+    <h3>Pipeline Progress</h3>
+    <div class="progress-track">
+      <div class="progress-fill" style="width: {{ status.progress_percent }}%" data-progress-fill></div>
+    </div>
+    <ol class="stage-list" data-stage-list>
+      {% for step in status.steps %}
+      <li class="stage-step {{ step.state }}">{{ step.label }} <span class="muted">{{ step.display_state }}</span></li>
+      {% endfor %}
+    </ol>
+    {% if status.stage_error %}
+    <div class="lesson-error-actions" data-error-actions>
+      <button
+        type="button"
+        class="secondary-button"
+        data-error-trigger
+        data-error-title="{{ lesson.title }}"
+        data-error-message="{{ status.stage_error }}"
+      >
+        View error
+      </button>
+    </div>
+    {% endif %}
+  </article>
+  <article class="panel">
+    <h3>Artifacts</h3>
+    <ul class="artifact-list">
+      <li>Raw snapshot: {{ lesson.raw_snapshot_path or "missing" }}</li>
+      <li>Normalized content: {{ lesson.normalized_content_path or "missing" }}</li>
+      <li>Audio: {{ lesson.audio_path or "missing" }}</li>
+      <li>Video: {{ lesson.video_path or "missing" }}</li>
+      <li data-youtube-item>
+        YouTube:
+        <span class="{% if status.youtube_url %}hidden{% endif %}" data-youtube-missing>missing</span>
+        <a
+          class="{% if not status.youtube_url %}hidden{% endif %}"
+          data-youtube-link
+          href="{{ status.youtube_url if status.youtube_url else '#' }}"
+          target="_blank"
+          rel="noreferrer"
+        >
+          {{ status.youtube_url if status.youtube_url else "" }}
+        </a>
+      </li>
+    </ul>
+  </article>
+  <article class="panel">
+    <h3>Script</h3>
+    <pre class="script-box">{{ lesson.script_text or "No script yet." }}</pre>
+  </article>
+</section>
+
+<section class="panel">
+  <h3>Recent Lesson Events</h3>
+  <ul class="event-list">
+    {% for event in events %}
+    <li><strong>{{ event.event_type }}</strong> {{ event.message }} <span class="muted">{{ event.created_at }}</span></li>
+    {% else %}
+    <li class="muted">No lesson events yet.</li>
+    {% endfor %}
+  </ul>
+</section>
+
+<aside class="error-banner hidden" data-error-banner>
+  <div class="error-banner-copy">
+    <p class="eyebrow">Lesson Error</p>
+    <h3 data-error-banner-title>Error</h3>
+    <pre data-error-banner-body></pre>
+  </div>
+  <div class="error-banner-actions">
+    <button type="button" class="secondary-button" data-error-copy>Copy error</button>
+    <button type="button" data-error-dismiss>Dismiss</button>
+  </div>
+</aside>
+<script>
+  function renderLessonSteps(steps) {
+    return steps.map((step) => `<li class="stage-step ${step.state}">${step.label} <span class="muted">${step.display_state}</span></li>`).join("");
+  }
+
+  document.addEventListener("DOMContentLoaded", () => {
+    const errorBanner = document.querySelector("[data-error-banner]");
+    const errorTitle = document.querySelector("[data-error-banner-title]");
+    const errorBody = document.querySelector("[data-error-banner-body]");
+
+    async function refreshLessonStatus() {
+      const response = await fetch("/api/lessons/{{ lesson.id }}", { headers: { "Accept": "application/json" } });
+      if (!response.ok) return;
+      const lesson = await response.json();
+      document.querySelector("[data-stage-text]").textContent = `${lesson.stage_label} / ${lesson.stage_state_display}`;
+      document.querySelector("[data-eta-text]").textContent = `ETA: ${lesson.eta_text}`;
+      document.querySelector("[data-progress-fill]").style.width = `${lesson.progress_percent}%`;
+      document.querySelector("[data-stage-list]").innerHTML = renderLessonSteps(lesson.steps);
+      const youtubeLink = document.querySelector("[data-youtube-link]");
+      const youtubeMissing = document.querySelector("[data-youtube-missing]");
+      if (lesson.youtube_url && youtubeLink && youtubeMissing) {
+        youtubeLink.href = lesson.youtube_url;
+        youtubeLink.textContent = lesson.youtube_url;
+        youtubeLink.classList.remove("hidden");
+        youtubeMissing.classList.add("hidden");
+      } else {
+        youtubeLink?.classList.add("hidden");
+        if (youtubeMissing) youtubeMissing.classList.remove("hidden");
+      }
+      let errorActions = document.querySelector("[data-error-actions]");
+      let errorTrigger = document.querySelector("[data-error-trigger]");
+      if (lesson.stage_error) {
+        if (!errorActions) {
+          const holder = document.createElement("div");
+          holder.className = "lesson-error-actions";
+          holder.setAttribute("data-error-actions", "");
+          holder.innerHTML = '<button type="button" class="secondary-button" data-error-trigger>View error</button>';
+          document.querySelector("[data-stage-list]").insertAdjacentElement("afterend", holder);
+          errorActions = holder;
+          errorTrigger = holder.querySelector("[data-error-trigger]");
+        }
+        errorTrigger.dataset.errorTitle = lesson.title;
+        errorTrigger.dataset.errorMessage = lesson.stage_error;
+      } else {
+        errorActions?.remove();
+      }
+    }
+
+    document.addEventListener("click", async (event) => {
+      const trigger = event.target.closest("[data-error-trigger]");
+      if (trigger && errorBanner && errorTitle && errorBody) {
+        errorTitle.textContent = trigger.dataset.errorTitle || "Lesson error";
+        errorBody.textContent = trigger.dataset.errorMessage || "";
+        errorBanner.classList.remove("hidden");
+        return;
+      }
+      if (event.target.closest("[data-error-dismiss]") && errorBanner) {
+        errorBanner.classList.add("hidden");
+        return;
+      }
+      if (event.target.closest("[data-error-copy]") && errorBody) {
+        const value = errorBody.textContent || "";
+        if (value) await navigator.clipboard.writeText(value);
+      }
+    });
+
+    refreshLessonStatus();
+    setInterval(refreshLessonStatus, 4000);
+  });
+</script>
+{% endblock %}

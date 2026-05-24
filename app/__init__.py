@@ -1,0 +1,1 @@
+"""Trilium Study app package."""

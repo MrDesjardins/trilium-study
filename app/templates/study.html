@@ -1,0 +1,187 @@
+{% extends "base.html" %}
+{% block title %}Study{% endblock %}
+{% block content %}
+<section class="panel study-panel">
+  <p class="eyebrow">Flashcard Review</p>
+  <div class="study-header">
+    <div>
+      <h2>{% if review_mode %}Due now{% else %}Browse all cards{% endif %}</h2>
+      <p class="muted">
+        {% if review_mode %}
+        Work the due queue first, then switch to browse mode when you want to skim cards freely.
+        {% else %}
+        Browsing does not change scheduling. Use it to explore cards after the queue is done.
+        {% endif %}
+      </p>
+    </div>
+    <div class="study-toolbar">
+      {% if browse_entry_url and review_mode %}
+      <a class="study-toolbar-link" href="{{ browse_entry_url }}">Browse all cards</a>
+      {% endif %}
+      {% if not review_mode %}
+      <a class="study-toolbar-link" href="/study">Back to due queue</a>
+      {% endif %}
+      <form method="post" action="/study/reset" class="study-reset-form" data-reset-form>
+        <button type="button" class="secondary-button reset-trigger" data-reset-trigger>Reset all scheduling</button>
+        <div class="reset-confirm hidden" data-reset-confirm>
+          <p class="muted">This puts every card back into the due queue.</p>
+          <div class="reset-confirm-actions">
+            <button type="button" class="secondary-button" data-reset-cancel>Cancel</button>
+            <button type="submit" class="reset-danger">Confirm reset</button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <section class="study-stats-grid">
+    <article class="study-stat-card">
+      <strong>{{ stats.due_now }}</strong>
+      <span>Due now</span>
+    </article>
+    <article class="study-stat-card">
+      <strong>{{ stats.remaining_after_current }}</strong>
+      <span>Left after this one</span>
+    </article>
+    <article class="study-stat-card">
+      <strong>{{ stats.failed_today }}</strong>
+      <span>Failed today</span>
+    </article>
+    <article class="study-stat-card">
+      <strong>{{ stats.reviewed_today }}</strong>
+      <span>Reviewed today</span>
+    </article>
+    <article class="study-stat-card">
+      <strong>{{ stats.total_cards }}</strong>
+      <span>Total cards</span>
+    </article>
+  </section>
+
+  {% if flashcard %}
+  {% if browse_state %}
+  <div class="study-browse-bar">
+    <span class="stage queued">Card {{ browse_state.position }} of {{ browse_state.total }}</span>
+    <div class="study-browse-nav">
+      {% if browse_state.previous_id %}
+      <a class="study-toolbar-link" href="/study/browse/{{ browse_state.previous_id }}">Previous</a>
+      {% endif %}
+      {% if browse_state.next_id %}
+      <a class="study-toolbar-link" href="/study/browse/{{ browse_state.next_id }}">Next</a>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+  <div class="study-card-shell" data-study-shell>
+    <div class="victory-burst hidden" data-victory-burst>
+      <span></span><span></span><span></span><span></span><span></span>
+      <span></span><span></span><span></span><span></span><span></span>
+    </div>
+    <div class="flashcard" onclick="this.classList.toggle('flipped')">
+      <div class="flashcard-face flashcard-front">
+        <h2>{{ flashcard.prompt }}</h2>
+        <p class="muted">Tap to flip</p>
+      </div>
+      <div class="flashcard-face flashcard-back">
+        <h2>{{ flashcard.answer }}</h2>
+        {% if flashcard.source_excerpt %}
+        <p class="muted">{{ flashcard.source_excerpt }}</p>
+        {% endif %}
+      </div>
+    </div>
+    <div class="study-links">
+      <a href="/lessons/{{ flashcard.lesson.id }}">Open lesson details</a>
+      {% if trilium_note_url %}
+      <a href="{{ trilium_note_url }}" target="_blank" rel="noreferrer">Read more in Trilium</a>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if review_mode %}
+  <form class="review-actions" method="post" action="/study/{{ flashcard.id }}/review" data-study-form>
+    <button type="submit" name="result" value="again" class="review-button review-again">Did not</button>
+    <button type="submit" name="result" value="pass" class="review-button review-pass" data-win-button>I got it</button>
+  </form>
+  <script>
+    (() => {
+      const form = document.querySelector("[data-study-form]");
+      const winButton = document.querySelector("[data-win-button]");
+      const shell = document.querySelector("[data-study-shell]");
+      const burst = document.querySelector("[data-victory-burst]");
+      if (!form || !winButton || !shell || !burst) return;
+
+      let celebrating = false;
+      form.addEventListener("submit", (event) => {
+        const submitter = event.submitter;
+        if (!submitter || submitter.value !== "pass" || celebrating) return;
+        event.preventDefault();
+        celebrating = true;
+        shell.classList.add("victory-mode");
+        burst.classList.remove("hidden");
+        setTimeout(() => form.requestSubmit(submitter), 850);
+      });
+    })();
+  </script>
+  {% else %}
+  <p class="muted browse-note">Browse mode is read-only. Return to the due queue when you want to score cards again.</p>
+  {% endif %}
+  {% else %}
+  <h2>{% if stats.total_cards %}No flashcards due right now{% else %}No flashcards ready{% endif %}</h2>
+  <p class="muted">
+    {% if stats.total_cards %}
+    Your due queue is clear for now. Browse the deck or reset scheduling to start over.
+    {% else %}
+    Generate a lesson first.
+    {% endif %}
+  </p>
+  {% if browse_entry_url %}
+  <div class="study-empty-actions">
+    <a class="study-toolbar-link" href="{{ browse_entry_url }}">Browse all cards</a>
+    <form method="post" action="/study/reset" class="study-reset-form" data-reset-form>
+      <button type="button" class="secondary-button reset-trigger" data-reset-trigger>Reset all scheduling</button>
+      <div class="reset-confirm hidden" data-reset-confirm>
+        <p class="muted">This puts every card back into the due queue.</p>
+        <div class="reset-confirm-actions">
+          <button type="button" class="secondary-button" data-reset-cancel>Cancel</button>
+          <button type="submit" class="reset-danger">Confirm reset</button>
+        </div>
+      </div>
+    </form>
+  </div>
+  {% endif %}
+  {% endif %}
+</section>
+
+<aside class="flash-banner {% if not flash_message %}hidden{% endif %}" data-flash-banner>
+  <div class="error-banner-copy">
+    <p class="eyebrow">{{ "Error" if flash_level == "error" else "Status" }}</p>
+    <h3>{{ flash_message or "Update" }}</h3>
+  </div>
+  <div class="error-banner-actions">
+    <button type="button" class="secondary-button" data-flash-dismiss>Dismiss</button>
+  </div>
+</aside>
+<script>
+  document.addEventListener("click", (event) => {
+    const resetTrigger = event.target.closest("[data-reset-trigger]");
+    if (resetTrigger) {
+      const form = resetTrigger.closest("[data-reset-form]");
+      form?.querySelector("[data-reset-confirm]")?.classList.remove("hidden");
+      resetTrigger.classList.add("hidden");
+      return;
+    }
+    const resetCancel = event.target.closest("[data-reset-cancel]");
+    if (resetCancel) {
+      const form = resetCancel.closest("[data-reset-form]");
+      form?.querySelector("[data-reset-confirm]")?.classList.add("hidden");
+      form?.querySelector("[data-reset-trigger]")?.classList.remove("hidden");
+      return;
+    }
+  });
+
+  document.addEventListener("click", (event) => {
+    if (event.target.closest("[data-flash-dismiss]")) {
+      document.querySelector("[data-flash-banner]")?.classList.add("hidden");
+    }
+  });
+</script>
+{% endblock %}
