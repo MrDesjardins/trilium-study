@@ -64,6 +64,7 @@ Disk artifacts store:
 - Trilium ETAPI for note traversal
 - OpenAI Responses API for script and flashcard generation
 - Kokoro for local TTS generation
+- spaCy English model `en_core_web_sm` for Kokoro's English G2P path via `misaki`
 - `ffmpeg` for MP4 rendering
 - YouTube Data API v3 for unlisted uploads
 - optional local YouTube audio-stream queue API reachable from the same host
@@ -73,5 +74,6 @@ Disk artifacts store:
 - `ffmpeg` must be installed on the host.
 - `espeak-ng` must be installed when using Kokoro for English fallback and phoneme support.
 - Python dependencies should be installed with `uv sync --extra dev --extra tts --extra youtube`.
+- Production installs must preinstall `en_core_web_sm` before the service handles English Kokoro synthesis so the runtime path never depends on spaCy auto-download behavior inside systemd.
 - `.env` must contain valid Trilium, OpenAI, and YouTube settings.
 - Network binding is controlled by `APP_HOST` and `APP_PORT` in `.env`, which are consumed by the systemd unit in production.

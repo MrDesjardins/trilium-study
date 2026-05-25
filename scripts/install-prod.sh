@@ -116,10 +116,26 @@ mkdir -p "${APP_DIR}/.state/logs" "${APP_DIR}/.state/workspace"
 uv venv .venv
 . .venv/bin/activate
 uv sync --extra dev --extra tts --extra youtube
+python - <<'PY'
+import importlib.util
+import subprocess
+import sys
+
+MODEL = "en_core_web_sm"
+
+if importlib.util.find_spec(MODEL) is None:
+    try:
+        subprocess.run([sys.executable, "-m", "spacy", "download", MODEL], check=True)
+    except subprocess.CalledProcessError as exc:
+        raise SystemExit(
+            "Failed to install required spaCy model en_core_web_sm for Kokoro English synthesis. "
+            "Ensure network access is available during install and rerun scripts/install-prod.sh."
+        ) from exc
+PY
 python -m app.bootstrap
 python - <<'PY'
 import importlib.util
-required = ["numpy", "soundfile", "kokoro", "fastapi", "sqlalchemy", "openai", "googleapiclient"]
+required = ["numpy", "soundfile", "kokoro", "fastapi", "sqlalchemy", "openai", "googleapiclient", "en_core_web_sm"]
 missing = [name for name in required if importlib.util.find_spec(name) is None]
 if missing:
     raise SystemExit(f"Missing required Python packages: {', '.join(missing)}")
