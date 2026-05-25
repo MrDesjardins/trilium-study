@@ -232,6 +232,20 @@ ssh pdesjardins@10.0.0.181 "tail -n 50 /home/pdesjardins/code/trilium-study/.sta
 
 Use the journal first for service start/stop failures, and `app.log` / `app.jsonl` for application behavior and job failures.
 
+If the service exits immediately after startup, check whether another process already holds the configured app port:
+
+```bash
+ssh pdesjardins@10.0.0.181 "ss -ltnp '( sport = :8083 )'"
+ssh pdesjardins@10.0.0.181 "ps -fp <pid>"
+```
+
+This service now follows the same `uv run python -m ...` pattern as the other Python services under `~/code`. If a stale manual process is holding the port, stop it and then restart the unit:
+
+```bash
+ssh pdesjardins@10.0.0.181 "kill <pid>"
+ssh pdesjardins@10.0.0.181 "sudo systemctl restart trilium-study.service"
+```
+
 ### Health Checks
 
 Check the app from another machine:

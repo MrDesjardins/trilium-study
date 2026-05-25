@@ -8,9 +8,8 @@ Type=simple
 User=__SERVICE_USER__
 Group=__SERVICE_GROUP__
 WorkingDirectory=__APP_DIR__
-EnvironmentFile=__APP_DIR__/.env
-ExecStart=__APP_DIR__/.venv/bin/python -m app.serve
-Restart=always
+ExecStart=__UV_BIN__ run python -m app.serve
+Restart=on-failure
 RestartSec=5
 
 [Install]

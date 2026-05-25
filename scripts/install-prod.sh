@@ -34,10 +34,17 @@ render_system_unit() {
   local template_path="${APP_DIR}/systemd/${SERVICE_NAME}"
   local output_path="$1"
   require_file "${template_path}" "systemd unit template"
+  local uv_bin
+  uv_bin="$(command -v uv)"
+  if [[ -z "${uv_bin}" ]]; then
+    echo "uv is required to render the systemd unit" >&2
+    exit 1
+  fi
   sed \
     -e "s|__APP_DIR__|${APP_DIR}|g" \
     -e "s|__SERVICE_USER__|${SERVICE_USER}|g" \
     -e "s|__SERVICE_GROUP__|${SERVICE_GROUP}|g" \
+    -e "s|__UV_BIN__|${uv_bin}|g" \
     "${template_path}" > "${output_path}"
 }
 

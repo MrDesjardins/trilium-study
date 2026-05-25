@@ -76,4 +76,4 @@ Disk artifacts store:
 - Python dependencies should be installed with `uv sync --extra dev --extra tts --extra youtube`.
 - Production installs must preinstall `en_core_web_sm` before the service handles English Kokoro synthesis so the runtime path never depends on spaCy auto-download behavior inside systemd.
 - `.env` must contain valid Trilium, OpenAI, and YouTube settings.
-- Network binding is controlled by `APP_HOST` and `APP_PORT` in `.env`, which are consumed by the systemd unit in production.
+- Network binding is controlled by `APP_HOST` and `APP_PORT` in `.env`. The production systemd unit now follows the same pattern as the other Python services under `~/code`: `uv run python -m app.serve`, with the application loading `.env` itself before Uvicorn starts.
