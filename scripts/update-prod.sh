@@ -13,6 +13,18 @@ check_command() {
   fi
 }
 
+require_noninteractive_service_sudo() {
+  local sudo_output
+  if sudo_output="$(sudo -n systemctl status "${SERVICE_NAME}" >/dev/null 2>&1)"; then
+    return
+  fi
+
+  echo "Service ${SERVICE_NAME} is not installed or the current user cannot manage it with passwordless sudo." >&2
+  echo "Run scripts/install-prod.sh once on the host with a TTY to install or update the systemd unit." >&2
+  echo "For unattended deploys afterward, configure sudoers so ${USER} can run systemctl for ${SERVICE_NAME} without a password." >&2
+  exit 1
+}
+
 require_file() {
   local path="$1"
   local description="$2"
@@ -99,6 +111,8 @@ check_command rsync
 check_command systemctl
 check_command sudo
 
+require_noninteractive_service_sudo
+
 ensure_uv
 
 cd "${APP_DIR}"
@@ -114,12 +128,6 @@ check_python_packages
 
 check_command ffmpeg
 check_command espeak-ng
-
-if ! sudo -n systemctl status "${SERVICE_NAME}" >/dev/null 2>&1; then
-  echo "Service ${SERVICE_NAME} is not installed or requires interactive sudo." >&2
-  echo "Run scripts/install-prod.sh once on the host with a TTY to install or update the systemd unit." >&2
-  exit 1
-fi
 
 sudo -n systemctl restart "${SERVICE_NAME}"
 sudo -n systemctl --no-pager --full status "${SERVICE_NAME}" >/dev/null
