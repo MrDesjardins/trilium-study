@@ -120,7 +120,7 @@ cd "${APP_DIR}"
 verify_env_file
 mkdir -p "${APP_DIR}/.state/logs" "${APP_DIR}/.state/workspace"
 
-uv venv .venv
+uv venv --allow-existing .venv
 . .venv/bin/activate
 uv sync --extra dev --extra tts --extra youtube
 python - <<'PY'
