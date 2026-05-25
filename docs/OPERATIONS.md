@@ -80,7 +80,7 @@ If you need an explicit command, use:
 
 ## Production Install
 
-Use [scripts/install-prod.sh](/home/miste/code/trilium-study/scripts/install-prod.sh) on the mini-pc. It:
+Use [scripts/install-prod.sh](/home/miste/code/trilium-study/scripts/install-prod.sh) on the mini-pc for one-time host bootstrap or whenever the systemd unit definition changes materially. It:
 
 - bootstraps `uv` automatically if the host does not already have it
 - installs required system packages
@@ -99,6 +99,16 @@ Important:
 - the script uses `sudo` internally only for the system-service install/restart steps
 - running the whole script under `sudo` will create root-owned runtime files and install `uv` under `/root`
 
+For routine code deploys after that one-time bootstrap, use [scripts/update-prod.sh](/home/miste/code/trilium-study/scripts/update-prod.sh). It:
+
+- creates or reuses the virtual environment
+- syncs Python dependencies and required extras
+- validates the deployed `.env`
+- reruns Alembic migrations through `app.bootstrap`
+- restarts the already-installed systemd service
+
+This matches the simpler update pattern used by the other Python services under `~/code`.
+
 ## Production Deploy From Workstation
 
 Deploy from the workstation with [deploy.sh](/home/miste/code/trilium-study/deploy.sh).
@@ -107,7 +117,7 @@ The script now:
 
 - rsyncs the repository to `pdesjardins@10.0.0.181:/home/pdesjardins/code/trilium-study`
 - renders and uploads a production `.env`
-- runs `scripts/install-prod.sh` remotely to reinstall deps, run migrations, and restart the service
+- runs `scripts/update-prod.sh` remotely to reinstall deps, run migrations, and restart the existing service
 - preserves the mini-pc `.state` by default so production remains the source of truth for runtime data
 
 Typical deploy:
@@ -155,7 +165,9 @@ Or let the deploy helper do that one-time step:
 CONFIGURE_SSH_KEY=1 ./deploy.sh
 ```
 
-After that, `./deploy.sh` should run without prompting for credentials.
+After that, `./deploy.sh` should run without prompting for SSH credentials.
+
+For fully unattended deploys, the mini-pc user also needs non-interactive `sudo` for the existing `trilium-study.service` restart and status commands. If that is not configured yet, `scripts/update-prod.sh` will fail fast with an actionable message instead of hanging on a password prompt.
 
 ## One-Time LAN Access Setup
 
@@ -176,7 +188,7 @@ Without this, the app can be healthy on the mini-pc but still unreachable from o
 
 ## Future Updates
 
-After the one-time SSH, linger, and firewall setup, future updates should only require:
+After the one-time SSH, service install, and firewall setup, future updates should only require:
 
 ```bash
 ./deploy.sh
