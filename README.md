@@ -87,6 +87,8 @@ uv run pytest
 
 For the mini-pc deployment flow, one-time host setup, and future update steps, see [docs/OPERATIONS.md](/home/miste/code/trilium-study/docs/OPERATIONS.md).
 
+For production support tasks such as service status, logs, health checks, and SQLite backups, use the maintenance section in [docs/OPERATIONS.md](/home/miste/code/trilium-study/docs/OPERATIONS.md).
+
 ## Database
 
 Schema changes are managed through Alembic migrations and are applied by `uv run python -m app.bootstrap`.

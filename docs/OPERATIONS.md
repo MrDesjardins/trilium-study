@@ -190,3 +190,110 @@ Recommended post-deploy checks:
 ssh pdesjardins@10.0.0.181 "systemctl --user --no-pager --full status trilium-study.service | sed -n '1,20p'"
 curl http://10.0.0.181:8083/healthz
 ```
+
+## Maintenance And Support
+
+Use these commands when supporting the production mini-pc.
+
+### Service Status
+
+Check the systemd user service:
+
+```bash
+ssh pdesjardins@10.0.0.181 "systemctl --user --no-pager --full status trilium-study.service"
+```
+
+Useful lifecycle commands:
+
+```bash
+ssh pdesjardins@10.0.0.181 "systemctl --user restart trilium-study.service"
+ssh pdesjardins@10.0.0.181 "systemctl --user stop trilium-study.service"
+ssh pdesjardins@10.0.0.181 "systemctl --user start trilium-study.service"
+```
+
+### Service Logs
+
+Read recent systemd journal logs:
+
+```bash
+ssh pdesjardins@10.0.0.181 "journalctl --user -u trilium-study.service -n 100 --no-pager"
+```
+
+Follow logs live:
+
+```bash
+ssh pdesjardins@10.0.0.181 "journalctl --user -u trilium-study.service -f"
+```
+
+The app also writes file logs under `.state/logs`:
+
+```bash
+ssh pdesjardins@10.0.0.181 "tail -n 100 /home/pdesjardins/code/trilium-study/.state/logs/app.log"
+ssh pdesjardins@10.0.0.181 "tail -n 50 /home/pdesjardins/code/trilium-study/.state/logs/app.jsonl"
+```
+
+Use the journal first for service start/stop failures, and `app.log` / `app.jsonl` for application behavior and job failures.
+
+### Health Checks
+
+Check the app from another machine:
+
+```bash
+curl http://10.0.0.181:8083/healthz
+```
+
+Check locally on the mini-pc:
+
+```bash
+ssh pdesjardins@10.0.0.181 "curl http://127.0.0.1:8083/healthz"
+```
+
+If the local check works but the remote check fails, the usual cause is firewall or LAN routing rather than the app itself.
+
+### Database And State
+
+The production SQLite database lives at:
+
+```bash
+/home/pdesjardins/code/trilium-study/.state/trilium-study.db
+```
+
+Quick lesson count check:
+
+```bash
+ssh pdesjardins@10.0.0.181 "sqlite3 /home/pdesjardins/code/trilium-study/.state/trilium-study.db 'select count(*) from lessons;'"
+```
+
+Create a timestamped production backup:
+
+```bash
+ssh pdesjardins@10.0.0.181 "cp /home/pdesjardins/code/trilium-study/.state/trilium-study.db /home/pdesjardins/code/trilium-study/.state/trilium-study.db.$(date +%Y%m%d-%H%M%S).bak"
+```
+
+Important runtime state on the mini-pc:
+
+- `.state/trilium-study.db`
+- `.state/youtube-token.json`
+- `.state/client_secret_*.json`
+- `.state/workspace/`
+- `.state/logs/`
+
+Do not overwrite these during routine deploys. That is why `deploy.sh` defaults to `COPY_STATE=0`.
+
+### Common Recovery Steps
+
+If a deploy completed but the app is unavailable:
+
+1. Check `systemctl --user status trilium-study.service`
+2. Check `journalctl --user -u trilium-study.service -n 100 --no-pager`
+3. Check local health: `curl http://127.0.0.1:8083/healthz`
+4. If local works but remote does not, check `ufw`
+5. If the service is down after a code update, rerun `./deploy.sh`
+
+If you intentionally need to replace production state from this workstation:
+
+```bash
+COPY_STATE=1 ./deploy.sh
+```
+
+That should be treated as a recovery/bootstrap action, not the normal update path.
