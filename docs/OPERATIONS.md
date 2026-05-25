@@ -93,6 +93,12 @@ Use [scripts/install-prod.sh](/home/miste/code/trilium-study/scripts/install-pro
 - renders and installs a systemd system service under `/etc/systemd/system`
 - enables and restarts the service through `sudo systemctl`
 
+Important:
+
+- run `scripts/install-prod.sh` as the application user, not with `sudo`
+- the script uses `sudo` internally only for the system-service install/restart steps
+- running the whole script under `sudo` will create root-owned runtime files and install `uv` under `/root`
+
 ## Production Deploy From Workstation
 
 Deploy from the workstation with [deploy.sh](/home/miste/code/trilium-study/deploy.sh).

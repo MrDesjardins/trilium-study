@@ -7,6 +7,12 @@ SERVICE_USER="${SERVICE_USER:-$USER}"
 SERVICE_GROUP="${SERVICE_GROUP:-$SERVICE_USER}"
 export PATH="${HOME}/.local/bin:${PATH}"
 
+if [[ "${EUID}" -eq 0 ]]; then
+  echo "Do not run scripts/install-prod.sh via sudo." >&2
+  echo "Run it as ${SERVICE_USER} from the app checkout; the script will use sudo internally for system service installation." >&2
+  exit 1
+fi
+
 check_command() {
   local name="$1"
   if ! command -v "$name" >/dev/null 2>&1; then
