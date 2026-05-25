@@ -86,4 +86,4 @@ if [[ "${COPY_STATE}" == "1" && -d "${STATE_PATH}" ]]; then
     "${STATE_PATH}/" "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_DIR}/${STATE_PATH}/"
 fi
 
-ssh "${REMOTE_USER}@${REMOTE_HOST}" "cd ${REMOTE_DIR} && chmod +x scripts/install-prod.sh && APP_DIR=${REMOTE_DIR} SERVICE_NAME=${SERVICE_NAME} ./scripts/install-prod.sh"
+ssh "${REMOTE_USER}@${REMOTE_HOST}" "cd ${REMOTE_DIR} && chmod +x scripts/update-prod.sh && APP_DIR=${REMOTE_DIR} SERVICE_NAME=${SERVICE_NAME} ./scripts/update-prod.sh"
