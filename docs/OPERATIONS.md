@@ -70,6 +70,8 @@ Preferred configuration:
 - set `KOKORO_LANG_CODE`
 - set `KOKORO_SPEED`
 
+For English Kokoro voices, production installs also need the spaCy model `en_core_web_sm`. `scripts/install-prod.sh` now installs it ahead of service startup so Kokoro does not attempt a runtime model download from inside the systemd service.
+
 If you need an explicit command, use:
 
 ```bash
@@ -84,6 +86,7 @@ Use [scripts/install-prod.sh](/home/miste/code/trilium-study/scripts/install-pro
 - installs required system packages
 - creates the virtual environment
 - installs Python dependencies with the required extras
+- preinstalls the `en_core_web_sm` spaCy model required by Kokoro English synthesis
 - validates the deployed `.env`
 - preserves and reuses copied state directories
 - runs Alembic migrations
