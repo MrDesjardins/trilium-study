@@ -35,7 +35,7 @@ The application persists state in SQLite and stores staged artifacts on disk und
 - `app/youtube_auth.py`
   One-time OAuth bootstrap that generates the persisted YouTube token file.
 - `deploy.sh` and `scripts/install-prod.sh`
-  Workstation-to-mini-pc deployment path that renders a production `.env`, copies SQLite/runtime state, reinstalls dependencies, runs migrations, and restarts the user service.
+  Workstation-to-mini-pc deployment path that renders a production `.env`, copies SQLite/runtime state when requested, reinstalls dependencies, runs migrations, and installs/restarts a systemd system service.
 
 ## Persistence Model
 

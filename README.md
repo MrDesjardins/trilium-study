@@ -75,7 +75,7 @@ KOKORO_COMMAND=".venv/bin/python -m app.kokoro_cli --input {input} --output {out
 - `app/kokoro_cli.py`: repo-native Kokoro WAV generator
 - `app/youtube_auth.py`: one-time OAuth token bootstrap for YouTube uploads
 - `app/models.py`: SQLite schema for courses, lessons, artifacts, jobs, uploads, and flashcards
-- `deploy.sh`: renders production `.env`, preserves remote production state by default, and runs systemd deployment for the mini-pc
+- `deploy.sh`: renders production `.env`, preserves remote production state by default, and installs/restarts the mini-pc system service
 
 ## Tests
 

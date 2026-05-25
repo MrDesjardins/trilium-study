@@ -3,6 +3,8 @@ set -euo pipefail
 
 APP_DIR="${APP_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 SERVICE_NAME="${SERVICE_NAME:-trilium-study.service}"
+SERVICE_USER="${SERVICE_USER:-$USER}"
+SERVICE_GROUP="${SERVICE_GROUP:-$SERVICE_USER}"
 export PATH="${HOME}/.local/bin:${PATH}"
 
 check_command() {
@@ -22,35 +24,34 @@ require_file() {
   fi
 }
 
-ensure_systemd_user_available() {
-  export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
-  if systemctl --user show-environment >/dev/null 2>&1; then
-    :
-  elif command -v loginctl >/dev/null 2>&1 && command -v sudo >/dev/null 2>&1; then
-    sudo -n loginctl enable-linger "$USER" >/dev/null 2>&1 || true
-    if ! systemctl --user show-environment >/dev/null 2>&1; then
-      echo "systemd user services are not available for $USER. Ensure lingering is enabled and the user manager is running." >&2
-      exit 1
-    fi
-  else
-    echo "systemd user services are not available for $USER. Ensure lingering is enabled and the user manager is running." >&2
-    exit 1
-  fi
+render_system_unit() {
+  local template_path="${APP_DIR}/systemd/${SERVICE_NAME}"
+  local output_path="$1"
+  require_file "${template_path}" "systemd unit template"
+  sed \
+    -e "s|__APP_DIR__|${APP_DIR}|g" \
+    -e "s|__SERVICE_USER__|${SERVICE_USER}|g" \
+    -e "s|__SERVICE_GROUP__|${SERVICE_GROUP}|g" \
+    "${template_path}" > "${output_path}"
+}
 
-  if command -v loginctl >/dev/null 2>&1; then
-    local linger_state
-    linger_state="$(loginctl show-user "$USER" -p Linger 2>/dev/null || true)"
-    if [[ "${linger_state}" != "Linger=yes" ]]; then
-      if command -v sudo >/dev/null 2>&1; then
-        sudo -n loginctl enable-linger "$USER" >/dev/null 2>&1 || true
-        linger_state="$(loginctl show-user "$USER" -p Linger 2>/dev/null || true)"
-      fi
-      if [[ "${linger_state}" != "Linger=yes" ]]; then
-        echo "Persistent user services require loginctl linger for $USER. Run: sudo loginctl enable-linger $USER" >&2
-        exit 1
-      fi
-    fi
-  fi
+install_system_service() {
+  local rendered_unit
+  rendered_unit="$(mktemp)"
+  trap 'rm -f "${rendered_unit}"' RETURN
+  render_system_unit "${rendered_unit}"
+
+  sudo mkdir -p /etc/systemd/system
+  sudo install -m 0644 "${rendered_unit}" "/etc/systemd/system/${SERVICE_NAME}"
+
+  rm -f "${HOME}/.config/systemd/user/${SERVICE_NAME}" || true
+  systemctl --user disable --now "${SERVICE_NAME}" >/dev/null 2>&1 || true
+  systemctl --user daemon-reload >/dev/null 2>&1 || true
+
+  sudo systemctl daemon-reload
+  sudo systemctl enable --now "${SERVICE_NAME}"
+  sudo systemctl restart "${SERVICE_NAME}"
+  sudo systemctl --no-pager --full status "${SERVICE_NAME}" >/dev/null
 }
 
 ensure_uv() {
@@ -145,11 +146,5 @@ check_command ffmpeg
 check_command espeak-ng
 check_command systemctl
 check_command rsync
-ensure_systemd_user_available
-
-mkdir -p "${HOME}/.config/systemd/user"
-cp "systemd/${SERVICE_NAME}" "${HOME}/.config/systemd/user/${SERVICE_NAME}"
-systemctl --user daemon-reload
-systemctl --user enable --now "${SERVICE_NAME}"
-systemctl --user restart "${SERVICE_NAME}"
-systemctl --user --no-pager --full status "${SERVICE_NAME}" >/dev/null
+check_command sudo
+install_system_service

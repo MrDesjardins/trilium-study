@@ -90,9 +90,8 @@ Use [scripts/install-prod.sh](/home/miste/code/trilium-study/scripts/install-pro
 - validates the deployed `.env`
 - preserves and reuses copied state directories
 - runs Alembic migrations
-- installs the systemd user unit
-- verifies that the systemd user manager is actually available before enabling the service
-- requires `loginctl linger` for the target user so the service survives after SSH logout
+- renders and installs a systemd system service under `/etc/systemd/system`
+- enables and restarts the service through `sudo systemctl`
 
 ## Production Deploy From Workstation
 
@@ -152,16 +151,6 @@ CONFIGURE_SSH_KEY=1 ./deploy.sh
 
 After that, `./deploy.sh` should run without prompting for credentials.
 
-## One-Time Systemd Persistence Setup
-
-Because the app runs as a systemd user service, the mini-pc user must have linger enabled once:
-
-```bash
-sudo loginctl enable-linger pdesjardins
-```
-
-Without this, the service can start during an SSH session and then disappear after logout.
-
 ## One-Time LAN Access Setup
 
 If the mini-pc firewall is enabled, allow the application port once:
@@ -190,7 +179,7 @@ After the one-time SSH, linger, and firewall setup, future updates should only r
 Recommended post-deploy checks:
 
 ```bash
-ssh pdesjardins@10.0.0.181 "systemctl --user --no-pager --full status trilium-study.service | sed -n '1,20p'"
+ssh pdesjardins@10.0.0.181 "sudo systemctl --no-pager --full status trilium-study.service | sed -n '1,20p'"
 curl http://10.0.0.181:8083/healthz
 ```
 
@@ -200,18 +189,18 @@ Use these commands when supporting the production mini-pc.
 
 ### Service Status
 
-Check the systemd user service:
+Check the system service:
 
 ```bash
-ssh pdesjardins@10.0.0.181 "systemctl --user --no-pager --full status trilium-study.service"
+ssh pdesjardins@10.0.0.181 "sudo systemctl --no-pager --full status trilium-study.service"
 ```
 
 Useful lifecycle commands:
 
 ```bash
-ssh pdesjardins@10.0.0.181 "systemctl --user restart trilium-study.service"
-ssh pdesjardins@10.0.0.181 "systemctl --user stop trilium-study.service"
-ssh pdesjardins@10.0.0.181 "systemctl --user start trilium-study.service"
+ssh pdesjardins@10.0.0.181 "sudo systemctl restart trilium-study.service"
+ssh pdesjardins@10.0.0.181 "sudo systemctl stop trilium-study.service"
+ssh pdesjardins@10.0.0.181 "sudo systemctl start trilium-study.service"
 ```
 
 ### Service Logs
@@ -219,13 +208,13 @@ ssh pdesjardins@10.0.0.181 "systemctl --user start trilium-study.service"
 Read recent systemd journal logs:
 
 ```bash
-ssh pdesjardins@10.0.0.181 "journalctl --user -u trilium-study.service -n 100 --no-pager"
+ssh pdesjardins@10.0.0.181 "sudo journalctl -u trilium-study.service -n 100 --no-pager"
 ```
 
 Follow logs live:
 
 ```bash
-ssh pdesjardins@10.0.0.181 "journalctl --user -u trilium-study.service -f"
+ssh pdesjardins@10.0.0.181 "sudo journalctl -u trilium-study.service -f"
 ```
 
 The app also writes file logs under `.state/logs`:
@@ -287,8 +276,8 @@ Do not overwrite these during routine deploys. That is why `deploy.sh` defaults 
 
 If a deploy completed but the app is unavailable:
 
-1. Check `systemctl --user status trilium-study.service`
-2. Check `journalctl --user -u trilium-study.service -n 100 --no-pager`
+1. Check `sudo systemctl status trilium-study.service`
+2. Check `sudo journalctl -u trilium-study.service -n 100 --no-pager`
 3. Check local health: `curl http://127.0.0.1:8083/healthz`
 4. If local works but remote does not, check `ufw`
 5. If the service is down after a code update, rerun `./deploy.sh`
