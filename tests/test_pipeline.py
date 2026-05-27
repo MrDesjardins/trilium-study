@@ -18,6 +18,7 @@ from app.pipeline import (
     estimate_narration_minutes,
     media_duration_seconds,
     minimum_script_words,
+    narration_markup_issues,
     schedule_flashcard_review,
     script_meets_length_target,
     script_word_count,
@@ -40,11 +41,15 @@ def test_script_prompt_marks_added_context_policy():
     system, user = generator.build_prompt("Atoms", "source body")
 
     assert "factual validator" in system
-    assert "[Added context]" in system
+    assert "structured added-context fields" in system
     assert "Atoms" in user
     assert "validation_summary" in user
     assert "corrected_or_clarified_points" in user
     assert "Do not compress a content-rich lesson" in system
+    assert "natural narration only" in user
+    assert "no Markdown" in user
+    assert "asterisk, dash, hash, greater-than, backtick, or vertical bar" in user
+    assert "list it in added_context_notes" in user
     assert "produce enough explanation to comfortably study from the notes" in user
     assert "use examples, analogies, comparisons, and short restatements generously" in system
     assert "optimize for study quality, comprehension, and review value rather than brevity" in user
@@ -55,6 +60,56 @@ def test_script_prompt_marks_added_context_policy():
 
 def test_script_generator_uses_more_internal_attempts():
     assert DefaultScriptGenerator.max_generation_attempts == 4
+
+
+def test_narration_markup_issues_flags_markdown_not_plain_punctuation():
+    text = "# Heading\n\n- Bullet point\n\n[Added context] Extra background."
+
+    assert narration_markup_issues(text) == [
+        "Markdown heading marker",
+        "Markdown list marker",
+        "inline added-context tag",
+    ]
+    assert narration_markup_issues("This sentence uses a dash-like pause, but it is not a list marker.") == []
+
+
+def test_script_generator_retries_markdown_script_output():
+    class FakeResponses:
+        def __init__(self):
+            self.inputs: list[str] = []
+            self.calls = 0
+
+        def parse(self, model, input, text_format):
+            self.calls += 1
+            self.inputs.append(input[-1]["content"])
+            if self.calls == 1:
+                script = "# Intro\n\n- This should not be spoken as Markdown.\n\n" + ("Plain sentence. " * 260)
+            else:
+                script = "Plain narration starts here. " + ("Plain sentence. " * 260)
+            return SimpleNamespace(
+                output_parsed=SimpleNamespace(
+                    script_text=script,
+                    added_context_notes=[],
+                    validation_summary="ok",
+                    corrected_or_clarified_points=[],
+                    filled_gap_topics=[],
+                )
+            )
+
+    class FakeClient:
+        def __init__(self):
+            self.responses = FakeResponses()
+
+    generator = DefaultScriptGenerator(DummySettings())
+    fake_client = FakeClient()
+    generator.client = fake_client
+
+    generated = generator.generate("Atoms", "source " * 100)
+
+    assert generated.script_text.startswith("Plain narration starts here.")
+    assert fake_client.responses.calls == 2
+    assert "Previous attempt failed narration formatting validation" in fake_client.responses.inputs[1]
+    assert "Markdown heading marker" in fake_client.responses.inputs[1]
 
 
 def test_script_generation_requires_openai_key():

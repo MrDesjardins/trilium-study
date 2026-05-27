@@ -74,6 +74,7 @@ render_remote_env "${TMP_DIR}/.env"
 
 rsync -az --delete \
   --exclude '.git' \
+  --exclude "${STATE_PATH}" \
   --exclude '.venv' \
   --exclude '.pytest_cache' \
   ./ "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_DIR}/"

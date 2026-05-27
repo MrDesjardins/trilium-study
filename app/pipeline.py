@@ -21,6 +21,16 @@ from app.models import Flashcard, FlashcardReview, Lesson, LessonArtifact, YouTu
 
 STAGES = ["collect", "normalize", "script", "flashcards", "audio", "video", "upload"]
 
+MARKDOWN_NARRATION_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"(?m)^\s{0,3}#{1,6}\s+"), "Markdown heading marker"),
+    (re.compile(r"(?m)^\s{0,3}[-*+]\s+"), "Markdown list marker"),
+    (re.compile(r"(?m)^\s{0,3}\d+[.)]\s+"), "numbered list marker"),
+    (re.compile(r"(?m)^\s{0,3}>\s+"), "Markdown block quote marker"),
+    (re.compile(r"```|~~~"), "code fence"),
+    (re.compile(r"(?m)^\s*\|.+\|\s*$"), "Markdown table row"),
+    (re.compile(r"\[[Aa]dded context\]"), "inline added-context tag"),
+)
+
 
 @dataclass
 class GeneratedScript:
@@ -110,24 +120,27 @@ class DefaultScriptGenerator:
             "and places where the wording would confuse a beginner. "
             "Second, produce a detailed teaching script that preserves the source meaning while correcting errors, "
             "filling only bounded gaps required for accurate understanding, and explaining ideas in simple language. "
-            "The script must be beginner-friendly, specific, concrete, and polished enough to study from directly. "
+            "The script must be beginner-friendly, specific, concrete, and polished enough to study from directly as spoken narration. "
             "Define terms, unpack claims, explain why each idea matters, and use examples, analogies, comparisons, and short restatements generously whenever they improve comprehension. "
             "It is acceptable to repeat an idea in clearer words, approach it from another angle, or add another example if that helps the learner understand and review the material. "
             "Do not compress a content-rich lesson into a short summary. Treat the source as the backbone of a spoken lesson and walk through the major ideas thoroughly so the listener could learn from the script alone. "
             "Do not pad with fluff or motivational filler. Do not invent controversial claims. If a source claim looks doubtful, correct it cautiously. "
-            "Any material not directly present in the notes but added to make the lesson accurate or understandable must be tagged inline with [Added context]."
+            "Any material not directly present in the notes but added to make the lesson accurate or understandable must be summarized in the structured added-context fields, not tagged inline in the spoken script."
         )
         user = (
             f"Lesson title: {lesson_title}\n\n"
             "Use the following source material as the base lesson. Keep source meaning intact, but do not preserve source mistakes.\n"
             "Return JSON with keys:\n"
-            "- script_text: a detailed lesson script written in simple language for a beginner\n"
+            "- script_text: a detailed plain-spoken lesson script written in simple language for a beginner\n"
             "- added_context_notes: a short list of major added-context items\n"
             "- validation_summary: one short paragraph summarizing whether the notes were sound or needed correction\n"
             "- corrected_or_clarified_points: a list of important corrections or clarifications you made\n"
             "- filled_gap_topics: a list of small missing topics you added so the lesson is understandable\n\n"
             "Script requirements:\n"
             "- organize the script as a real lesson with a short introduction, section-by-section teaching through the source, and a closing recap\n"
+            "- write script_text as natural narration only, with no Markdown, bullets, numbered lists, headings, tables, code fences, decorative separators, bracket labels, or inline tags\n"
+            "- do not include literal formatting symbols that a text-to-speech narrator might read aloud, such as asterisk, dash, hash, greater-than, backtick, or vertical bar\n"
+            "- if you need transitions, write them as normal sentences instead of list markers or headings\n"
             "- teach the material step by step in plain English\n"
             "- prefer short paragraphs and explicit definitions\n"
             "- make the explanation more detailed than the source notes when the notes are terse\n"
@@ -137,7 +150,7 @@ class DefaultScriptGenerator:
             "- it is good to revisit a difficult idea from two angles if that makes it easier to learn\n"
             "- for abstract or difficult claims, add at least one concrete example, analogy, or comparison unless the notes already provide one\n"
             "- when a section introduces several ideas, explain them one by one instead of collapsing them into a dense paragraph\n"
-            "- if the notes are incomplete, add only the minimum accurate context needed and mark it [Added context]\n\n"
+            "- if the notes are incomplete, add only the minimum accurate context needed, include it naturally in the narration, and list it in added_context_notes\n\n"
             "Length requirements:\n"
             f"- the source contains about {normalized_word_count} words\n"
             f"- produce enough explanation to comfortably study from the notes, which usually means at least about {minimum_words} words for a lesson of this size\n"
@@ -167,13 +180,19 @@ class DefaultScriptGenerator:
             user = base_user
             if attempt > 1:
                 previous_text = f"Previous draft was about {previous_word_count} words. " if previous_word_count else ""
-                user += (
-                    f"\n{previous_text}Previous attempt was too short for the lesson size. "
-                    f"Expand the script so it clearly teaches the full lesson and reaches at least about {minimum_words} words unless the source is genuinely repetitive. "
-                    "For each important point, add more concrete examples, clearer definitions, comparisons, and alternate phrasings so the lesson becomes easier to study from. "
-                    "Do not merely restate headings or compress multiple sections into one paragraph. "
-                    "Lean toward richer explanation and review-friendly repetition rather than a polished short summary.\n"
-                )
+                if "not plain spoken narration" in last_error:
+                    user += (
+                        f"\n{previous_text}Previous attempt failed narration formatting validation: {last_error}. "
+                        "Rewrite the script as ordinary paragraphs only, without Markdown syntax, bullets, numbered lists, headings, tables, code fences, bracket labels, or inline tags.\n"
+                    )
+                else:
+                    user += (
+                        f"\n{previous_text}Previous attempt was too short for the lesson size. "
+                        f"Expand the script so it clearly teaches the full lesson and reaches at least about {minimum_words} words unless the source is genuinely repetitive. "
+                        "For each important point, add more concrete examples, clearer definitions, comparisons, and alternate phrasings so the lesson becomes easier to study from. "
+                        "Do not merely restate headings or compress multiple sections into one paragraph. "
+                        "Lean toward richer explanation and review-friendly repetition rather than a polished short summary.\n"
+                    )
             if attempt >= 2:
                 user += (
                     "Coverage requirements for this retry:\n"
@@ -205,6 +224,11 @@ class DefaultScriptGenerator:
             )
             payload = response.output_parsed
             if payload is None:
+                continue
+            markup_issues = narration_markup_issues(payload.script_text)
+            if markup_issues:
+                last_error = "Generated script was not plain spoken narration: " + ", ".join(markup_issues)
+                previous_word_count = script_word_count(payload.script_text)
                 continue
             generated_word_count = script_word_count(payload.script_text)
             previous_word_count = generated_word_count
@@ -577,6 +601,14 @@ def default_kokoro_command() -> str:
 
 def script_word_count(text: str) -> int:
     return len(re.findall(r"\b[\w'-]+\b", text))
+
+
+def narration_markup_issues(text: str) -> list[str]:
+    issues: list[str] = []
+    for pattern, label in MARKDOWN_NARRATION_PATTERNS:
+        if pattern.search(text):
+            issues.append(label)
+    return issues
 
 
 def cleaned_source_material(text: str) -> str:

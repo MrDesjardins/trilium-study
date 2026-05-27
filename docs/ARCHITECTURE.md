@@ -25,7 +25,7 @@ The application persists state in SQLite and stores staged artifacts on disk und
 - `app/status.py`
   Runtime dependency checks, queue position calculation, stage progress modeling, ETA helpers, and generated-script length metadata for the UI.
 - `app/pipeline.py`
-  LLM-backed script validation and expansion with minimum narration-length gates based on cleaned source text, including a looser middle-band floor so study-worthy 8-11 minute scripts are not rejected unnecessarily, comprehension-first prompting that pushes for examples and alternate explanations when needed, multi-attempt in-stage script retries that escalate to section-by-section teaching requirements before the lesson job fails, flashcard generation, Kokoro TTS integration, ffmpeg rendering sized to narration duration, YouTube upload integration, and SM-2 review scheduling.
+  LLM-backed script validation and expansion with minimum narration-length gates based on cleaned source text, including a looser middle-band floor so study-worthy 8-11 minute scripts are not rejected unnecessarily, comprehension-first prompting that pushes for examples and alternate explanations when needed, plain-spoken narration validation that rejects Markdown-like script output before TTS, multi-attempt in-stage script retries that escalate to section-by-section teaching requirements before the lesson job fails, flashcard generation, Kokoro TTS integration, ffmpeg rendering sized to narration duration, YouTube upload integration, and SM-2 review scheduling.
 - `app/models.py`
   SQLAlchemy schema for courses, lessons, artifacts, jobs, job events, uploads, flashcards, and reviews.
 - `app/migrate.py` and `migrations/`
@@ -35,7 +35,7 @@ The application persists state in SQLite and stores staged artifacts on disk und
 - `app/youtube_auth.py`
   One-time OAuth bootstrap that generates the persisted YouTube token file.
 - `deploy.sh`, `scripts/update-prod.sh`, and `scripts/install-prod.sh`
-  Workstation-to-mini-pc deployment path that renders a production `.env`, copies SQLite/runtime state when requested, and runs a non-interactive update flow for routine deploys. A separate one-time host bootstrap script handles privileged package and systemd unit installation.
+  Workstation-to-mini-pc deployment path that renders a production `.env`, excludes `.state` during routine code syncs, copies SQLite/runtime state only when requested, and runs a non-interactive update flow for routine deploys. A separate one-time host bootstrap script handles privileged package and systemd unit installation.
 
 ## Persistence Model
 
@@ -54,7 +54,7 @@ Disk artifacts store:
 - raw note snapshots
 - normalized lesson text
 - generated scripts
-- script provenance including source/script word counts and estimated narration length
+- script provenance including source/script word counts, estimated narration length, validation notes, and added-context metadata kept separate from spoken narration
 - flashcard JSON
 - audio files
 - video files

@@ -7,6 +7,7 @@ The repository currently verifies:
 - recursive lesson normalization and non-text filtering
 - HTML cleanup and duplicate-block suppression during lesson normalization
 - script validation-and-expansion prompt policy
+- plain-spoken narration validation that rejects Markdown-like script output before audio generation
 - comprehension-first retry prompting for examples, restatements, and richer study explanations
 - multi-attempt in-stage script escalation before a lesson pipeline retry is consumed
 - minimum script-length gating for content-rich lessons using cleaned source text

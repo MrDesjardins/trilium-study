@@ -127,6 +127,7 @@ Typical deploy:
 ```
 
 This default does not overwrite the mini-pc SQLite DB, YouTube auth files, or generated artifacts.
+The primary code sync excludes `.state`; production state is copied from the workstation only when `COPY_STATE=1`.
 
 Optional knobs:
 
@@ -303,6 +304,24 @@ Important runtime state on the mini-pc:
 - `.state/logs/`
 
 Do not overwrite these during routine deploys. That is why `deploy.sh` defaults to `COPY_STATE=0`.
+
+### Stale YouTube Upload Recovery
+
+If a lesson has a stored YouTube URL but the external video was deleted or removed, clear only the upload state so the lesson can be uploaded again without losing script, flashcards, audio, video, or review history.
+
+First create a backup:
+
+```bash
+ssh pdesjardins@10.0.0.181 "cp /home/pdesjardins/code/trilium-study/.state/trilium-study.db /home/pdesjardins/code/trilium-study/.state/trilium-study.db.$(date +%Y%m%d-%H%M%S).bak"
+```
+
+Then clear the stale upload row and reset the upload artifact for the affected lesson:
+
+```bash
+ssh pdesjardins@10.0.0.181 "sqlite3 /home/pdesjardins/code/trilium-study/.state/trilium-study.db \"begin; delete from youtube_uploads where lesson_id = <lesson_id>; update lesson_artifacts set state = 'pending', metadata_json = null, error = null where lesson_id = <lesson_id> and artifact_type = 'youtube_upload'; commit;\""
+```
+
+Afterward, use the app's lesson `Re-generate` action to create a new script, audio, video, and upload with the current generation rules.
 
 ### Common Recovery Steps
 
