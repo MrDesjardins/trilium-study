@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 
 from app.config import get_settings
+from app.pipeline import configure_tts_runtime_warnings
 
 
 def parse_args() -> argparse.Namespace:
@@ -19,6 +20,8 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    settings = get_settings()
+    configure_tts_runtime_warnings(settings.hf_token)
     try:
         import numpy as np
         import soundfile as sf

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,6 +15,7 @@ from app.pipeline import (
     DefaultScriptGenerator,
     FfmpegVideoRenderer,
     cleaned_source_material,
+    configure_tts_runtime_warnings,
     default_kokoro_command,
     estimate_narration_minutes,
     media_duration_seconds,
@@ -205,6 +207,37 @@ def test_default_kokoro_command_targets_repo_module():
     assert "-m app.kokoro_cli" in command
     assert "{input}" in command
     assert "{output}" in command
+
+
+def test_configure_tts_runtime_warnings_is_safe_without_torch(monkeypatch):
+    original_import = __import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "torch":
+            raise ImportError
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.__import__", fake_import)
+
+    configure_tts_runtime_warnings()
+
+
+def test_configure_tts_runtime_warnings_exports_hf_token(monkeypatch):
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
+    original_import = __import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "torch":
+            raise ImportError
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.__import__", fake_import)
+
+    configure_tts_runtime_warnings("secret-token")
+
+    assert os.environ["HF_TOKEN"] == "secret-token"
+    assert os.environ["HUGGING_FACE_HUB_TOKEN"] == "secret-token"
 
 
 def test_progress_helpers_cover_queued_and_completed_states():

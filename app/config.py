@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     trilium_parent_note_id: str = Field(alias="TRILIUM_PARENT_NOTE_ID")
     youtube_client_secrets: str | None = Field(default=None, alias="YOUTUBE_CLIENT_SECRETS")
     youtube_token_file: str = Field(default=".state/youtube-token.json", alias="YOUTUBE_TOKEN_FILE")
+    hf_token: str | None = Field(default=None, alias="HF_TOKEN")
     kokoro_command: str | None = Field(default=None, alias="KOKORO_COMMAND")
     kokoro_voice: str = Field(default="af_heart", alias="KOKORO_VOICE")
     kokoro_lang_code: str = Field(default="a", alias="KOKORO_LANG_CODE")

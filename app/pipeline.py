@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
+import warnings
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -303,6 +305,7 @@ class CommandTTSGenerator:
         return {"mode": "kokoro", "path": str(output_path), "duration_seconds": media_duration_seconds(output_path)}
 
     def _generate_builtin(self, lesson: Lesson, script_text: str, output_path: Path) -> dict[str, Any]:
+        configure_tts_runtime_warnings(self.settings.hf_token)
         try:
             import numpy as np
             import soundfile as sf
@@ -597,6 +600,31 @@ def upsert_youtube_upload(session: Session, lesson: Lesson, upload: GeneratedUpl
 
 def default_kokoro_command() -> str:
     return f"{sys.executable} -m app.kokoro_cli --input {{input}} --output {{output}}"
+
+
+def configure_tts_runtime_warnings(hf_token: str | None = None) -> None:
+    if hf_token:
+        os.environ.setdefault("HF_TOKEN", hf_token)
+        os.environ.setdefault("HUGGING_FACE_HUB_TOKEN", hf_token)
+    warnings.filterwarnings(
+        "ignore",
+        message="dropout option adds dropout after all but last recurrent layer.*",
+        category=UserWarning,
+        module=r"torch\.nn\.modules\.rnn",
+    )
+    warnings.filterwarnings(
+        "ignore",
+        message=r"`torch\.nn\.utils\.weight_norm` is deprecated.*",
+        category=FutureWarning,
+        module=r"torch\.nn\.utils\.weight_norm",
+    )
+    try:
+        import torch
+    except ImportError:
+        return
+    nnpack = getattr(getattr(torch, "backends", None), "nnpack", None)
+    if nnpack is not None and hasattr(nnpack, "set_flags"):
+        nnpack.set_flags(False)
 
 
 def script_word_count(text: str) -> int:

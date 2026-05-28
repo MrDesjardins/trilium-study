@@ -72,6 +72,8 @@ Preferred configuration:
 
 For English Kokoro voices, production installs also need the spaCy model `en_core_web_sm`. `scripts/install-prod.sh` now installs it ahead of service startup so Kokoro does not attempt a runtime model download from inside the systemd service.
 
+Set `HF_TOKEN` in `.env` if Hugging Face Hub warns about unauthenticated requests while Kokoro loads model assets. The TTS path exports that configured token for `huggingface_hub` before Kokoro imports. The app suppresses known non-actionable Kokoro/PyTorch runtime warnings during TTS generation, including `weight_norm` deprecation noise, single-layer LSTM dropout warnings, and NNPACK unsupported-hardware fallback messages. Treat new warnings outside that set as actionable until checked.
+
 If you need an explicit command, use:
 
 ```bash
