@@ -49,8 +49,8 @@
       <p class="muted">Direct child notes under the selected parent are treated as lessons.</p>
     </div>
     <form id="bulk-generate-form" method="post" action="/courses/generate" class="bulk-controls">
-      <label class="checkbox"><input type="checkbox" name="force_regenerate" value="true" /> Force regenerate</label>
-      <button type="submit">Generate Selected Lessons</button>
+      <button type="submit">Generate From Last Done Selected</button>
+      <button type="submit" name="force_regenerate" value="true">Force Generate All Selected</button>
     </form>
   </div>
   <section class="lesson-grid">
@@ -107,11 +107,11 @@
     </div>
     <div class="lesson-actions">
       <form method="post" action="/lessons/{{ lesson.id }}/run">
-        <button type="submit">Generate</button>
+        <button type="submit">Generate From Last Done</button>
       </form>
       <form method="post" action="/lessons/{{ lesson.id }}/run">
         <input type="hidden" name="force_regenerate" value="true" />
-        <button type="submit">Re-generate</button>
+        <button type="submit">Force Generate All</button>
       </form>
       <form method="post" action="/lessons/{{ lesson.id }}/queue-audio" class="lesson-audio-queue-form {% if not status or not status.youtube_url %}hidden{% endif %}" data-audio-queue-form>
         <button type="submit" class="secondary-button">Queue audio stream</button>

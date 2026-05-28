@@ -10,8 +10,11 @@
   </div>
   <div class="lesson-hero-actions">
     <form method="post" action="/lessons/{{ lesson.id }}/run">
-      <label class="checkbox"><input type="checkbox" name="force_regenerate" value="true" /> Force regenerate</label>
-      <button type="submit">Run pipeline</button>
+      <button type="submit">Generate From Last Done</button>
+    </form>
+    <form method="post" action="/lessons/{{ lesson.id }}/run">
+      <input type="hidden" name="force_regenerate" value="true" />
+      <button type="submit">Force Generate All</button>
     </form>
     <form method="post" action="/lessons/{{ lesson.id }}/queue-audio" class="{% if not status.youtube_url %}hidden{% endif %}" data-audio-queue-form>
       <button type="submit" class="secondary-button">Queue audio stream</button>

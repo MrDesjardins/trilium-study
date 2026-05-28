@@ -321,7 +321,7 @@ Then clear the stale upload row and reset the upload artifact for the affected l
 ssh pdesjardins@10.0.0.181 "sqlite3 /home/pdesjardins/code/trilium-study/.state/trilium-study.db \"begin; delete from youtube_uploads where lesson_id = <lesson_id>; update lesson_artifacts set state = 'pending', metadata_json = null, error = null where lesson_id = <lesson_id> and artifact_type = 'youtube_upload'; commit;\""
 ```
 
-Afterward, use the app's lesson `Re-generate` action to create a new script, audio, video, and upload with the current generation rules.
+Afterward, use the app's lesson `Force Generate All` action to create a new script, audio, video, and upload with the current generation rules.
 
 ### Common Recovery Steps
 
