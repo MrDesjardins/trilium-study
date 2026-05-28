@@ -270,7 +270,7 @@
   <h3>Recent Job Events</h3>
   <ul class="event-list">
     {% for event in events %}
-    <li><strong>{{ event.event_type }}</strong> {{ event.message }} <span class="muted">{{ event.created_at }}</span></li>
+    <li><strong>{{ event.event_type }}</strong> {{ event.message }} <span class="muted">{{ event.created_at|local_datetime }}</span></li>
     {% else %}
     <li class="muted">No job events yet.</li>
     {% endfor %}

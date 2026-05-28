@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from app.config import Settings
 from app.db import Base, make_session_factory
 from app.main import create_app
-from app.models import Course, Flashcard, FlashcardReview, Lesson, YouTubeUpload
+from app.models import Course, Flashcard, FlashcardReview, Job, JobEvent, Lesson, YouTubeUpload
 
 
 def make_settings(tmp_path: Path) -> Settings:
@@ -188,6 +188,36 @@ def test_queue_audio_lesson_posts_youtube_url(monkeypatch, tmp_path: Path):
         "queue_url": "http://127.0.0.1:8000/queue/add",
         "youtube_url": "https://www.youtube.com/watch?v=abc123",
     }
+
+
+def test_dashboard_shows_job_events_in_los_angeles_time(tmp_path: Path):
+    settings = make_settings(tmp_path)
+    session_factory, engine = make_session_factory(settings)
+    Base.metadata.create_all(bind=engine)
+
+    with session_factory() as session:
+        course = Course(trilium_note_id="course", title="Course", parent_note_id=None, traversal_hash="course")
+        session.add(course)
+        session.flush()
+        job = Job(course_id=course.id, lesson_id=None, job_type="course_sync", state="completed")
+        session.add(job)
+        session.flush()
+        session.add(
+            JobEvent(
+                job_id=job.id,
+                event_type="job_completed",
+                message="Done",
+                created_at=datetime(2026, 5, 28, 6, 30, tzinfo=timezone.utc),
+            )
+        )
+        session.commit()
+
+    app = create_app(settings)
+    with TestClient(app) as client:
+        response = client.get("/")
+
+    assert response.status_code == 200
+    assert "2026-05-27 11:30:00 PM PDT" in response.text
 
 
 def test_queue_audio_lesson_requires_youtube_upload(tmp_path: Path):

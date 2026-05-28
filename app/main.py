@@ -4,6 +4,7 @@ import json
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
@@ -44,6 +45,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     session_factory, _ = make_session_factory(settings)
     bootstrap_database(settings)
     templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+    display_timezone = ZoneInfo("America/Los_Angeles")
+
+    def local_datetime(value: datetime | None) -> str:
+        if value is None:
+            return "unknown"
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(display_timezone).strftime("%Y-%m-%d %I:%M:%S %p %Z")
+
+    templates.env.filters["local_datetime"] = local_datetime
 
     def services_factory() -> PipelineServices:
         trilium_client = TriliumClient(settings.trilium_url, settings.trilium_etapi_token)
