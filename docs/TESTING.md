@@ -18,6 +18,7 @@ The repository currently verifies:
 - durable lesson job success path
 - durable lesson job failure path
 - automatic retry scheduling for transient lesson job failures
+- local lesson CLI generation path and workspace path resolution
 - progress and ETA helper behavior
 
 Run the current test suite with:

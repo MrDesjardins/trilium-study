@@ -197,6 +197,49 @@ After the one-time SSH, service install, and firewall setup, future updates shou
 ./deploy.sh
 ```
 
+## Local GPU Generation With Production Database
+
+When this workstation has a faster GPU than the mini-pc, generate lessons locally and write the results back to production with [scripts/generate-local-prod.sh](/home/miste/code/trilium-study/scripts/generate-local-prod.sh).
+
+The script:
+
+1. stops `trilium-study.service` on the mini-pc so SQLite is not locked
+2. copies the production database and any existing lesson workspace artifacts to `.state/prod-sync/`
+3. runs the full lesson pipeline locally (Kokoro TTS uses this machine's GPU)
+4. copies the updated database and generated artifacts back to the mini-pc
+5. restarts the production service
+
+List lessons from production:
+
+```bash
+./scripts/generate-local-prod.sh --list
+```
+
+Generate one or more lessons:
+
+```bash
+./scripts/generate-local-prod.sh 42
+./scripts/generate-local-prod.sh 42 43 44
+./scripts/generate-local-prod.sh --force 42
+```
+
+Requirements on this workstation:
+
+- passwordless SSH to the mini-pc (same as `./deploy.sh`)
+- passwordless `sudo systemctl stop/start trilium-study.service` on the mini-pc
+- local `.env` with valid Trilium, OpenAI, and Kokoro settings
+- `uv sync --extra tts --extra youtube` dependencies installed
+
+The script uses your local `.env` for Trilium and OpenAI, but copies the production SQLite database and YouTube auth files from the mini-pc for the duration of the run. Results appear in the production UI at `http://10.0.0.181:8083/` when the sync completes.
+
+To run against the synced production database without the remote sync wrapper:
+
+```bash
+DATABASE_URL=sqlite:///$(pwd)/.state/prod-sync/trilium-study.db \
+WORKSPACE_DIR=$(pwd)/.state/prod-sync/workspace \
+uv run python -m app.run_lesson 42
+```
+
 Recommended post-deploy checks:
 
 ```bash

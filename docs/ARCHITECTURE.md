@@ -34,8 +34,10 @@ The application persists state in SQLite and stores staged artifacts on disk und
   Repo-native CLI wrapper for Kokoro WAV synthesis when an explicit command path is desired.
 - `app/youtube_auth.py`
   One-time OAuth bootstrap that generates the persisted YouTube token file.
-- `deploy.sh`, `scripts/update-prod.sh`, and `scripts/install-prod.sh`
-  Workstation-to-mini-pc deployment path that renders a production `.env`, excludes `.state` during routine code syncs, copies SQLite/runtime state only when requested, and runs a non-interactive update flow for routine deploys. A separate one-time host bootstrap script handles privileged package and systemd unit installation.
+- `app/run_lesson.py`
+  CLI entry point for synchronous local lesson generation against the configured database and workspace.
+- `deploy.sh`, `scripts/update-prod.sh`, `scripts/install-prod.sh`, and `scripts/generate-local-prod.sh`
+  Workstation-to-mini-pc deployment path that renders a production `.env`, excludes `.state` during routine code syncs, copies SQLite/runtime state only when requested, and runs a non-interactive update flow for routine deploys. A separate one-time host bootstrap script handles privileged package and systemd unit installation. `generate-local-prod.sh` runs GPU-backed generation on the workstation and syncs results back to production.
 
 ## Persistence Model
 
