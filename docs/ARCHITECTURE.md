@@ -17,7 +17,7 @@ The application persists state in SQLite and stores staged artifacts on disk und
 ## Main Components
 
 - `app/main.py`
-  Server-rendered FastAPI UI, JSON endpoints, polling status APIs, flashcard study queue stats, browse/reset study actions, server-side audio-stream queue actions for uploaded YouTube lessons, app bootstrap, and background runner startup.
+  Server-rendered FastAPI UI, JSON endpoints, polling status APIs, flashcard study queue stats, in-place due-queue reviews via `Accept: application/json` on the review POST, browse/reset study actions, server-side audio-stream queue actions for uploaded YouTube lessons, app bootstrap, and background runner startup.
 - `app/content.py`
   Trilium ETAPI client plus recursive lesson collection and normalized text assembly, including HTML cleanup and duplicate-block suppression so downstream script generation sees cleaner study material.
 - `app/jobs.py`

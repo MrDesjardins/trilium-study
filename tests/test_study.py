@@ -110,6 +110,29 @@ def test_study_page_shows_queue_stats_and_due_card(tmp_path: Path):
     assert ">3<" in response.text
 
 
+def test_review_flashcard_returns_json_for_in_place_updates(tmp_path: Path):
+    now = datetime.now(timezone.utc)
+    settings = make_settings(tmp_path)
+    session_factory, engine = make_session_factory(settings)
+    Base.metadata.create_all(bind=engine)
+    ids = seed_study_data(session_factory, now=now)
+
+    app = create_app(settings)
+    with TestClient(app) as client:
+        response = client.post(
+            f"/study/{ids['due_card_id']}/review",
+            data={"result": "pass"},
+            headers={"Accept": "application/json"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["stats"]["reviewed_today"] >= 2
+    assert payload["flashcard"] is not None
+    assert payload["flashcard"]["id"] == ids["failed_due_card_id"]
+    assert payload["browse_entry_url"] == "/study/browse"
+
+
 def test_study_browse_mode_can_open_specific_card(tmp_path: Path):
     now = datetime.now(timezone.utc)
     settings = make_settings(tmp_path)

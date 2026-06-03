@@ -756,12 +756,14 @@ button:hover { transform: translateY(-1px); }
     align-items: stretch;
   }
   .review-actions {
-    grid-template-columns: 1fr;
-    gap: 12px;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
   }
   .review-actions button {
     width: 100%;
     min-height: 68px;
+    font-size: 1rem;
+    padding: 16px 12px;
   }
   .study-links {
     display: grid;

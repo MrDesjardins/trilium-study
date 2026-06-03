@@ -16,7 +16,7 @@
     </div>
     <div class="study-toolbar">
       {% if browse_entry_url and review_mode %}
-      <a class="study-toolbar-link" href="{{ browse_entry_url }}">Browse all cards</a>
+      <a class="study-toolbar-link" href="{{ browse_entry_url }}" data-browse-toolbar>Browse all cards</a>
       {% endif %}
       {% if not review_mode %}
       <a class="study-toolbar-link" href="/study">Back to due queue</a>
@@ -34,30 +34,30 @@
     </div>
   </div>
 
-  <section class="study-stats-grid">
+  <section class="study-stats-grid" data-study-stats>
     <article class="study-stat-card">
-      <strong>{{ stats.due_now }}</strong>
+      <strong data-stat="due_now">{{ stats.due_now }}</strong>
       <span>Due now</span>
     </article>
     <article class="study-stat-card">
-      <strong>{{ stats.remaining_after_current }}</strong>
+      <strong data-stat="remaining_after_current">{{ stats.remaining_after_current }}</strong>
       <span>Left after this one</span>
     </article>
     <article class="study-stat-card">
-      <strong>{{ stats.failed_today }}</strong>
+      <strong data-stat="failed_today">{{ stats.failed_today }}</strong>
       <span>Failed today</span>
     </article>
     <article class="study-stat-card">
-      <strong>{{ stats.reviewed_today }}</strong>
+      <strong data-stat="reviewed_today">{{ stats.reviewed_today }}</strong>
       <span>Reviewed today</span>
     </article>
     <article class="study-stat-card">
-      <strong>{{ stats.total_cards }}</strong>
+      <strong data-stat="total_cards">{{ stats.total_cards }}</strong>
       <span>Total cards</span>
     </article>
   </section>
 
-  {% if flashcard %}
+  <div data-study-active class="{% if not flashcard %}hidden{% endif %}">
   {% if browse_state %}
   <div class="study-browse-bar">
     <span class="stage queued">Card {{ browse_state.position }} of {{ browse_state.total }}</span>
@@ -76,66 +76,43 @@
       <span></span><span></span><span></span><span></span><span></span>
       <span></span><span></span><span></span><span></span><span></span>
     </div>
-    <div class="flashcard" onclick="this.classList.toggle('flipped')">
+    <div class="flashcard" data-flashcard onclick="this.classList.toggle('flipped')">
       <div class="flashcard-face flashcard-front">
-        <h2>{{ flashcard.prompt }}</h2>
+        <h2 data-flashcard-prompt>{{ flashcard.prompt if flashcard else "" }}</h2>
         <p class="muted">Tap to flip</p>
       </div>
       <div class="flashcard-face flashcard-back">
-        <h2>{{ flashcard.answer }}</h2>
-        {% if flashcard.source_excerpt %}
-        <p class="muted">{{ flashcard.source_excerpt }}</p>
-        {% endif %}
+        <h2 data-flashcard-answer>{{ flashcard.answer if flashcard else "" }}</h2>
+        <p class="muted {% if not flashcard or not flashcard.source_excerpt %}hidden{% endif %}" data-flashcard-excerpt>{{ flashcard.source_excerpt if flashcard and flashcard.source_excerpt else "" }}</p>
       </div>
     </div>
     <div class="study-links">
-      <a href="/lessons/{{ flashcard.lesson.id }}">Open lesson details</a>
-      {% if trilium_note_url %}
-      <a href="{{ trilium_note_url }}" target="_blank" rel="noreferrer">Read more in Trilium</a>
-      {% endif %}
+      <a href="/lessons/{{ flashcard.lesson.id if flashcard else 0 }}" data-lesson-link>Open lesson details</a>
+      <a href="{{ trilium_note_url or '#' }}" target="_blank" rel="noreferrer" data-trilium-link class="{% if not trilium_note_url %}hidden{% endif %}">Read more in Trilium</a>
     </div>
   </div>
 
   {% if review_mode %}
-  <form class="review-actions" method="post" action="/study/{{ flashcard.id }}/review" data-study-form>
+  <form class="review-actions" method="post" action="/study/{{ flashcard.id if flashcard else 0 }}/review" data-study-form>
     <button type="submit" name="result" value="again" class="review-button review-again"><span class="review-button-label">Wrong</span></button>
     <button type="submit" name="result" value="pass" class="review-button review-pass" data-win-button><span class="review-button-label">Good</span></button>
   </form>
-  <script>
-    (() => {
-      const form = document.querySelector("[data-study-form]");
-      const winButton = document.querySelector("[data-win-button]");
-      const shell = document.querySelector("[data-study-shell]");
-      const burst = document.querySelector("[data-victory-burst]");
-      if (!form || !winButton || !shell || !burst) return;
-
-      let celebrating = false;
-      form.addEventListener("submit", (event) => {
-        const submitter = event.submitter;
-        if (!submitter || submitter.value !== "pass" || celebrating) return;
-        event.preventDefault();
-        celebrating = true;
-        shell.classList.add("victory-mode");
-        burst.classList.remove("hidden");
-        setTimeout(() => form.requestSubmit(submitter), 850);
-      });
-    })();
-  </script>
   {% else %}
   <p class="muted browse-note">Browse mode is read-only. Return to the due queue when you want to score cards again.</p>
   {% endif %}
-  {% else %}
-  <h2>{% if stats.total_cards %}No flashcards due right now{% else %}No flashcards ready{% endif %}</h2>
-  <p class="muted">
+  </div>
+
+  <div data-study-empty class="{% if flashcard %}hidden{% endif %}">
+  <h2 data-empty-title>{% if stats.total_cards %}No flashcards due right now{% else %}No flashcards ready{% endif %}</h2>
+  <p class="muted" data-empty-message>
     {% if stats.total_cards %}
     Your due queue is clear for now. Browse the deck or reset scheduling to start over.
     {% else %}
     Generate a lesson first.
     {% endif %}
   </p>
-  {% if browse_entry_url %}
-  <div class="study-empty-actions">
-    <a class="study-toolbar-link" href="{{ browse_entry_url }}">Browse all cards</a>
+  <div class="study-empty-actions {% if not browse_entry_url %}hidden{% endif %}" data-study-empty-actions>
+    <a class="study-toolbar-link" href="{{ browse_entry_url or '/study/browse' }}" data-browse-entry-link>Browse all cards</a>
     <form method="post" action="/study/reset" class="study-reset-form" data-reset-form>
       <button type="button" class="secondary-button reset-trigger" data-reset-trigger>Reset all scheduling</button>
       <div class="reset-confirm hidden" data-reset-confirm>
@@ -147,8 +124,7 @@
       </div>
     </form>
   </div>
-  {% endif %}
-  {% endif %}
+  </div>
 </section>
 
 <aside class="flash-banner {% if not flash_message %}hidden{% endif %}" data-flash-banner>
@@ -183,5 +159,142 @@
       document.querySelector("[data-flash-banner]")?.classList.add("hidden");
     }
   });
+
+  (() => {
+    const form = document.querySelector("[data-study-form]");
+    if (!form) return;
+
+    const winButton = document.querySelector("[data-win-button]");
+    const shell = document.querySelector("[data-study-shell]");
+    const burst = document.querySelector("[data-victory-burst]");
+    const flashcardEl = document.querySelector("[data-flashcard]");
+    const activeRegion = document.querySelector("[data-study-active]");
+    const emptyRegion = document.querySelector("[data-study-empty]");
+    const emptyActions = document.querySelector("[data-study-empty-actions]");
+    const browseToolbarLink = document.querySelector("[data-browse-toolbar]");
+
+    const statKeys = ["due_now", "remaining_after_current", "failed_today", "reviewed_today", "total_cards"];
+    let celebrating = false;
+    let submitting = false;
+
+    const setHidden = (element, hidden) => {
+      if (!element) return;
+      element.classList.toggle("hidden", hidden);
+    };
+
+    const resetCelebration = () => {
+      celebrating = false;
+      shell?.classList.remove("victory-mode");
+      burst?.classList.add("hidden");
+    };
+
+    const updateStats = (stats) => {
+      for (const key of statKeys) {
+        const node = document.querySelector(`[data-stat="${key}"]`);
+        if (node && stats[key] !== undefined) {
+          node.textContent = String(stats[key]);
+        }
+      }
+    };
+
+    const applyFlashcard = (card) => {
+      const prompt = document.querySelector("[data-flashcard-prompt]");
+      const answer = document.querySelector("[data-flashcard-answer]");
+      const excerpt = document.querySelector("[data-flashcard-excerpt]");
+      const lessonLink = document.querySelector("[data-lesson-link]");
+      const triliumLink = document.querySelector("[data-trilium-link]");
+
+      if (!card) {
+        setHidden(activeRegion, true);
+        setHidden(emptyRegion, false);
+        const emptyTitle = document.querySelector("[data-empty-title]");
+        const emptyMessage = document.querySelector("[data-empty-message]");
+        const totalCards = Number(document.querySelector('[data-stat="total_cards"]')?.textContent || "0");
+        if (emptyTitle) {
+          emptyTitle.textContent = totalCards ? "No flashcards due right now" : "No flashcards ready";
+        }
+        if (emptyMessage) {
+          emptyMessage.textContent = totalCards
+            ? "Your due queue is clear for now. Browse the deck or reset scheduling to start over."
+            : "Generate a lesson first.";
+        }
+        setHidden(emptyActions, totalCards === 0);
+        return;
+      }
+
+      setHidden(activeRegion, false);
+      setHidden(emptyRegion, true);
+      if (prompt) prompt.textContent = card.prompt;
+      if (answer) answer.textContent = card.answer;
+      if (excerpt) {
+        excerpt.textContent = card.source_excerpt || "";
+        setHidden(excerpt, !card.source_excerpt);
+      }
+      if (lessonLink) lessonLink.href = `/lessons/${card.lesson_id}`;
+      if (triliumLink) {
+        if (card.trilium_note_url) {
+          triliumLink.href = card.trilium_note_url;
+          setHidden(triliumLink, false);
+        } else {
+          setHidden(triliumLink, true);
+        }
+      }
+      form.action = card.review_url;
+      flashcardEl?.classList.remove("flipped");
+      resetCelebration();
+    };
+
+    const submitReview = async (result) => {
+      if (submitting) return;
+      submitting = true;
+      form.querySelectorAll("button").forEach((button) => {
+        button.disabled = true;
+      });
+
+      try {
+        const body = new FormData();
+        body.set("result", result);
+        const response = await fetch(form.action, {
+          method: "POST",
+          headers: { Accept: "application/json" },
+          body,
+        });
+        if (!response.ok) {
+          throw new Error(`Review failed (${response.status})`);
+        }
+        const payload = await response.json();
+        updateStats(payload.stats);
+        applyFlashcard(payload.flashcard);
+        if (browseToolbarLink) {
+          setHidden(browseToolbarLink, !payload.browse_entry_url);
+        }
+      } catch (error) {
+        console.error(error);
+        form.submit();
+      } finally {
+        submitting = false;
+        form.querySelectorAll("button").forEach((button) => {
+          button.disabled = false;
+        });
+      }
+    };
+
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const submitter = event.submitter;
+      if (!submitter || submitting) return;
+      const result = submitter.value;
+      if (result === "pass" && winButton && shell && burst && !celebrating) {
+        celebrating = true;
+        shell.classList.add("victory-mode");
+        burst.classList.remove("hidden");
+        window.setTimeout(() => {
+          submitReview("pass");
+        }, 850);
+        return;
+      }
+      submitReview(result);
+    });
+  })();
 </script>
 {% endblock %}

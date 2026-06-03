@@ -155,6 +155,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             select(Flashcard).where(Flashcard.suspended.is_(False)).order_by(Flashcard.due_at.asc(), Flashcard.id.asc())
         ).all()
 
+    def next_due_flashcard(session: Session, now: datetime) -> Flashcard | None:
+        return session.scalar(
+            select(Flashcard).where(Flashcard.suspended.is_(False), Flashcard.due_at <= now).order_by(Flashcard.due_at.asc())
+        )
+
+    def study_flashcard_payload(flashcard: Flashcard | None) -> dict | None:
+        if flashcard is None:
+            return None
+        trilium_note_url = None
+        if flashcard.lesson:
+            trilium_note_url = f"{settings.trilium_url.rstrip('/')}/#root/{flashcard.lesson.trilium_note_id}"
+        return {
+            "id": flashcard.id,
+            "prompt": flashcard.prompt,
+            "answer": flashcard.answer,
+            "source_excerpt": flashcard.source_excerpt,
+            "lesson_id": flashcard.lesson_id,
+            "trilium_note_url": trilium_note_url,
+            "review_url": f"/study/{flashcard.id}/review",
+        }
+
     def browse_payload(cards: list[Flashcard], current_id: int | None = None) -> dict | None:
         if not cards:
             return None
@@ -333,9 +354,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         now = datetime.now(timezone.utc)
         flash_level, flash_message = pop_flash(request)
         stats = study_stats_payload(db, now)
-        flashcard = db.scalar(
-            select(Flashcard).where(Flashcard.suspended.is_(False), Flashcard.due_at <= now).order_by(Flashcard.due_at.asc())
-        )
+        flashcard = next_due_flashcard(db, now)
         return study_response(request, flashcard, stats, None, True, flash_level, flash_message)
 
     @app.get("/study/browse", response_class=HTMLResponse)
@@ -349,7 +368,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return study_response(request, flashcard, stats, state, False, flash_level, flash_message)
 
     @app.post("/study/{flashcard_id}/review")
-    async def review_flashcard(flashcard_id: int, result: str = Form(), db: Session = Depends(get_db)):
+    async def review_flashcard(
+        request: Request,
+        flashcard_id: int,
+        result: str = Form(),
+        db: Session = Depends(get_db),
+    ):
         flashcard = db.get(Flashcard, flashcard_id)
         if flashcard is None:
             raise HTTPException(status_code=404, detail="Flashcard not found")
@@ -357,6 +381,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         review = create_flashcard_review(flashcard, outcome)
         db.add(review)
         db.commit()
+        if "application/json" in request.headers.get("accept", ""):
+            now = datetime.now(timezone.utc)
+            stats = study_stats_payload(db, now)
+            next_card = next_due_flashcard(db, now)
+            return {
+                "stats": stats,
+                "flashcard": study_flashcard_payload(next_card),
+                "browse_entry_url": "/study/browse" if stats["total_cards"] else None,
+            }
         return RedirectResponse(url="/study", status_code=303)
 
     @app.post("/study/reset")
