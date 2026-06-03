@@ -76,7 +76,7 @@
       <span></span><span></span><span></span><span></span><span></span>
       <span></span><span></span><span></span><span></span><span></span>
     </div>
-    <div class="flashcard" data-flashcard onclick="this.classList.toggle('flipped')">
+    <div class="flashcard" data-flashcard>
       <div class="flashcard-face flashcard-front">
         <h2 data-flashcard-prompt>{{ flashcard.prompt if flashcard else "" }}</h2>
         <p class="muted">Tap to flip</p>
@@ -93,9 +93,11 @@
   </div>
 
   {% if review_mode %}
-  <form class="review-actions" method="post" action="/study/{{ flashcard.id if flashcard else 0 }}/review" data-study-form>
-    <button type="submit" name="result" value="again" class="review-button review-again"><span class="review-button-label">Wrong</span></button>
-    <button type="submit" name="result" value="pass" class="review-button review-pass" data-win-button><span class="review-button-label">Good</span></button>
+  <form class="study-review-form" method="post" action="/study/{{ flashcard.id if flashcard else 0 }}/review" data-study-form>
+    <div class="study-review-bar" role="group" aria-label="Grade card">
+      <button type="submit" name="result" value="again" class="study-review-btn study-review-again" disabled><span class="study-review-btn-label">Wrong</span></button>
+      <button type="submit" name="result" value="pass" class="study-review-btn study-review-pass" data-win-button disabled><span class="study-review-btn-label">Good</span></button>
+    </div>
   </form>
   {% else %}
   <p class="muted browse-note">Browse mode is read-only. Return to the due queue when you want to score cards again.</p>
@@ -174,8 +176,18 @@
     const browseToolbarLink = document.querySelector("[data-browse-toolbar]");
 
     const statKeys = ["due_now", "remaining_after_current", "failed_today", "reviewed_today", "total_cards"];
+    const reviewButtons = () => form.querySelectorAll(".study-review-btn");
     let celebrating = false;
     let submitting = false;
+    let reviewLocked = false;
+
+    const syncReviewButtons = () => {
+      const flipped = Boolean(flashcardEl?.classList.contains("flipped"));
+      const enabled = flipped && !submitting && !reviewLocked;
+      reviewButtons().forEach((button) => {
+        button.disabled = !enabled;
+      });
+    };
 
     const setHidden = (element, hidden) => {
       if (!element) return;
@@ -186,6 +198,21 @@
       celebrating = false;
       shell?.classList.remove("victory-mode");
       burst?.classList.add("hidden");
+    };
+
+    const resetFlashcardFace = (instant = false) => {
+      if (!flashcardEl) return;
+      if (!instant) {
+        flashcardEl.classList.remove("flipped");
+        syncReviewButtons();
+        return;
+      }
+      const priorTransition = flashcardEl.style.transition;
+      flashcardEl.style.transition = "none";
+      flashcardEl.classList.remove("flipped");
+      void flashcardEl.offsetWidth;
+      flashcardEl.style.transition = priorTransition;
+      syncReviewButtons();
     };
 
     const updateStats = (stats) => {
@@ -205,6 +232,7 @@
       const triliumLink = document.querySelector("[data-trilium-link]");
 
       if (!card) {
+        resetFlashcardFace(true);
         setHidden(activeRegion, true);
         setHidden(emptyRegion, false);
         const emptyTitle = document.querySelector("[data-empty-title]");
@@ -224,6 +252,7 @@
 
       setHidden(activeRegion, false);
       setHidden(emptyRegion, true);
+      resetFlashcardFace(true);
       if (prompt) prompt.textContent = card.prompt;
       if (answer) answer.textContent = card.answer;
       if (excerpt) {
@@ -240,16 +269,17 @@
         }
       }
       form.action = card.review_url;
-      flashcardEl?.classList.remove("flipped");
       resetCelebration();
+      syncReviewButtons();
     };
 
     const submitReview = async (result) => {
       if (submitting) return;
       submitting = true;
-      form.querySelectorAll("button").forEach((button) => {
-        button.disabled = true;
-      });
+      if (!celebrating) {
+        resetFlashcardFace(true);
+      }
+      syncReviewButtons();
 
       try {
         const body = new FormData();
@@ -273,17 +303,24 @@
         form.submit();
       } finally {
         submitting = false;
-        form.querySelectorAll("button").forEach((button) => {
-          button.disabled = false;
-        });
+        reviewLocked = false;
+        syncReviewButtons();
       }
     };
+
+    flashcardEl?.addEventListener("click", () => {
+      if (reviewLocked || submitting) return;
+      flashcardEl.classList.toggle("flipped");
+      syncReviewButtons();
+    });
 
     form.addEventListener("submit", (event) => {
       event.preventDefault();
       const submitter = event.submitter;
-      if (!submitter || submitting) return;
+      if (!submitter || submitting || reviewLocked || !flashcardEl?.classList.contains("flipped")) return;
       const result = submitter.value;
+      reviewLocked = true;
+      syncReviewButtons();
       if (result === "pass" && winButton && shell && burst && !celebrating) {
         celebrating = true;
         shell.classList.add("victory-mode");
@@ -295,6 +332,8 @@
       }
       submitReview(result);
     });
+
+    syncReviewButtons();
   })();
 </script>
 {% endblock %}

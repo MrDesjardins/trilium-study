@@ -164,7 +164,7 @@ nav a {
   color: #4f120d;
 }
 
-.lesson-card form, .review-actions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.lesson-card form { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 .lesson-top { display: flex; justify-content: space-between; gap: 16px; align-items: center; }
 .lesson-top-side {
   display: grid;
@@ -579,14 +579,20 @@ button:hover { transform: translateY(-1px); }
   gap: 12px;
   flex-wrap: wrap;
 }
-.review-actions {
+.study-review-form {
   width: min(760px, 100%);
   margin: 0 auto;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 18px;
+  padding: 0;
+  border: 0;
+  background: transparent;
 }
-.review-button {
+.study-review-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 18px;
+  width: 100%;
+}
+.study-review-btn {
   min-height: 84px;
   font-size: 1.1rem;
   padding: 18px 20px;
@@ -601,7 +607,7 @@ button:hover { transform: translateY(-1px); }
     inset 0 -10px 24px rgba(255,255,255,0.05),
     0 16px 28px rgba(43, 20, 17, 0.16);
 }
-.review-button::before {
+.study-review-btn::before {
   content: "";
   position: absolute;
   inset: -7px;
@@ -618,7 +624,7 @@ button:hover { transform: translateY(-1px); }
   pointer-events: none;
   z-index: 0;
 }
-.review-button::after {
+.study-review-btn::after {
   content: "";
   position: absolute;
   inset: 2px;
@@ -629,29 +635,42 @@ button:hover { transform: translateY(-1px); }
   pointer-events: none;
   z-index: 1;
 }
-.review-button-label {
+.study-review-btn-label {
   position: relative;
   z-index: 2;
   display: block;
   text-shadow: 0 1px 0 rgba(255,255,255,0.18);
 }
-.review-again {
+.study-review-again {
   background:
     radial-gradient(circle at top left, rgba(255, 228, 197, 0.3), transparent 34%),
     linear-gradient(180deg, rgba(227, 123, 84, 0.66) 0%, rgba(148, 39, 47, 0.6) 100%);
 }
-.review-pass {
+.study-review-pass {
   background:
     radial-gradient(circle at top left, rgba(216, 255, 226, 0.28), transparent 34%),
     linear-gradient(180deg, rgba(98, 177, 118, 0.66) 0%, rgba(38, 101, 71, 0.6) 100%);
 }
-.review-button:hover,
-.review-button:focus-visible {
+.study-review-btn:hover,
+.study-review-btn:focus-visible {
   transform: translateY(-2px);
   box-shadow:
     inset 0 1px 0 rgba(255,255,255,0.34),
     inset 0 -10px 24px rgba(255,255,255,0.08),
     0 20px 34px rgba(43, 20, 17, 0.2);
+}
+.study-review-btn:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.2),
+    inset 0 -10px 24px rgba(255,255,255,0.03),
+    0 8px 14px rgba(43, 20, 17, 0.1);
+}
+.study-review-btn:disabled:hover,
+.study-review-btn:disabled:focus-visible {
+  transform: none;
 }
 .error-banner {
   position: fixed;
@@ -755,12 +774,10 @@ button:hover { transform: translateY(-1px); }
     flex-direction: column;
     align-items: stretch;
   }
-  .review-actions {
-    grid-template-columns: 1fr 1fr;
+  .study-review-bar {
     gap: 10px;
   }
-  .review-actions button {
-    width: 100%;
+  .study-review-btn {
     min-height: 68px;
     font-size: 1rem;
     padding: 16px 12px;
