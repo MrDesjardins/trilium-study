@@ -66,7 +66,7 @@ def seed_study_data(session_factory, *, now: datetime) -> dict[str, int]:
                     flashcard_id=due_card.id,
                     result="pass",
                     scheduled_due_at=now - timedelta(days=1),
-                    reviewed_at=now - timedelta(hours=1),
+                    reviewed_at=now,
                     next_due_at=now + timedelta(days=1),
                     ease_factor_after=2.6,
                     interval_days_after=1,
@@ -76,7 +76,7 @@ def seed_study_data(session_factory, *, now: datetime) -> dict[str, int]:
                     flashcard_id=failed_due_card.id,
                     result="again",
                     scheduled_due_at=now - timedelta(hours=3),
-                    reviewed_at=now - timedelta(minutes=30),
+                    reviewed_at=now,
                     next_due_at=now + timedelta(days=1),
                     ease_factor_after=2.3,
                     interval_days_after=1,
@@ -131,6 +131,34 @@ def test_review_flashcard_returns_json_for_in_place_updates(tmp_path: Path):
     assert payload["flashcard"] is not None
     assert payload["flashcard"]["id"] == ids["failed_due_card_id"]
     assert payload["browse_entry_url"] == "/study/browse"
+
+
+def test_duplicate_review_post_does_not_grade_same_card_twice(tmp_path: Path):
+    now = datetime.now(timezone.utc)
+    settings = make_settings(tmp_path)
+    session_factory, engine = make_session_factory(settings)
+    Base.metadata.create_all(bind=engine)
+    ids = seed_study_data(session_factory, now=now)
+
+    app = create_app(settings)
+    with TestClient(app) as client:
+        first_response = client.post(
+            f"/study/{ids['due_card_id']}/review",
+            data={"result": "pass"},
+            headers={"Accept": "application/json"},
+        )
+        second_response = client.post(
+            f"/study/{ids['due_card_id']}/review",
+            data={"result": "pass"},
+            headers={"Accept": "application/json"},
+        )
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    assert second_response.json()["flashcard"]["id"] == ids["failed_due_card_id"]
+    with session_factory() as session:
+        reviews = session.query(FlashcardReview).filter_by(flashcard_id=ids["due_card_id"]).all()
+        assert len(reviews) == 2
 
 
 def test_study_browse_mode_can_open_specific_card(tmp_path: Path):

@@ -184,8 +184,10 @@
     const syncReviewButtons = () => {
       const flipped = Boolean(flashcardEl?.classList.contains("flipped"));
       const enabled = flipped && !submitting && !reviewLocked;
+      form.toggleAttribute("aria-busy", submitting || reviewLocked);
       reviewButtons().forEach((button) => {
         button.disabled = !enabled;
+        button.toggleAttribute("aria-disabled", !enabled);
       });
     };
 

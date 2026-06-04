@@ -160,6 +160,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             select(Flashcard).where(Flashcard.suspended.is_(False), Flashcard.due_at <= now).order_by(Flashcard.due_at.asc())
         )
 
+    def utc_datetime(value: datetime) -> datetime:
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
     def study_flashcard_payload(flashcard: Flashcard | None) -> dict | None:
         if flashcard is None:
             return None
@@ -225,6 +228,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             response.delete_cookie("flash_level")
             response.delete_cookie("flash_message")
         return response
+
+    def study_review_payload(session: Session, now: datetime) -> dict:
+        stats = study_stats_payload(session, now)
+        next_card = next_due_flashcard(session, now)
+        return {
+            "stats": stats,
+            "flashcard": study_flashcard_payload(next_card),
+            "browse_entry_url": "/study/browse" if stats["total_cards"] else None,
+        }
 
     @app.get("/", response_class=HTMLResponse)
     async def dashboard(request: Request, db: Session = Depends(get_db)):
@@ -377,19 +389,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         flashcard = db.get(Flashcard, flashcard_id)
         if flashcard is None:
             raise HTTPException(status_code=404, detail="Flashcard not found")
+        now = datetime.now(timezone.utc)
+        if flashcard.suspended or utc_datetime(flashcard.due_at) > now:
+            if "application/json" in request.headers.get("accept", ""):
+                return study_review_payload(db, now)
+            return redirect_with_flash("/study", "That card was already reviewed.", "info")
         outcome = schedule_flashcard_review(flashcard, "pass" if result == "pass" else "again")
         review = create_flashcard_review(flashcard, outcome)
         db.add(review)
         db.commit()
         if "application/json" in request.headers.get("accept", ""):
-            now = datetime.now(timezone.utc)
-            stats = study_stats_payload(db, now)
-            next_card = next_due_flashcard(db, now)
-            return {
-                "stats": stats,
-                "flashcard": study_flashcard_payload(next_card),
-                "browse_entry_url": "/study/browse" if stats["total_cards"] else None,
-            }
+            return study_review_payload(db, datetime.now(timezone.utc))
         return RedirectResponse(url="/study", status_code=303)
 
     @app.post("/study/reset")
