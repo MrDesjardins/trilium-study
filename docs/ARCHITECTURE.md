@@ -2,7 +2,7 @@
 
 ## Overview
 
-`trilium-study` is a single-user FastAPI application that turns a configured Trilium parent note into a course and each direct child note into a lesson unit. Each lesson is processed through a durable staged pipeline:
+`trilium-study` is a single-user FastAPI application that turns a configured Trilium catalog note into multiple courses. Each direct child of the catalog note is treated as a course, and each direct child of a course note is treated as a lesson unit. Each lesson is processed through a durable staged pipeline:
 
 1. `collect`
 2. `normalize`
@@ -17,7 +17,7 @@ The application persists state in SQLite and stores staged artifacts on disk und
 ## Main Components
 
 - `app/main.py`
-  Server-rendered FastAPI UI, JSON endpoints, polling status APIs, flashcard study queue stats, in-place due-queue reviews via `Accept: application/json` on the review POST, browse/reset study actions, server-side audio-stream queue actions for uploaded YouTube lessons, app bootstrap, and background runner startup.
+  Server-rendered FastAPI UI, catalog sync, grouped multi-course dashboard, JSON endpoints, polling status APIs, flashcard study queue stats, in-place due-queue reviews via `Accept: application/json` on the review POST, browse/reset study actions, server-side audio-stream queue actions for uploaded YouTube lessons, app bootstrap, and background runner startup.
 - `app/content.py`
   Trilium ETAPI client plus recursive lesson collection and normalized text assembly, including HTML cleanup and duplicate-block suppression so downstream script generation sees cleaner study material.
 - `app/jobs.py`
@@ -44,6 +44,7 @@ The application persists state in SQLite and stores staged artifacts on disk und
 SQLite stores:
 
 - course and lesson metadata
+- course and lesson archive markers used to hide missing Trilium notes without deleting generated state
 - lesson stage state and errors
 - job execution history
 - upload metadata
@@ -61,6 +62,8 @@ Disk artifacts store:
 - audio files
 - video files
 
+Catalog sync preserves generated state. Courses or lessons that disappear from the configured catalog hierarchy are marked archived and hidden from the default dashboard/API, but their database rows, flashcards, upload metadata, and workspace artifacts remain available for recovery or future reactivation. If an archived course or lesson reappears in Trilium under the catalog, sync clears the archive marker and makes it active again.
+
 ## External Dependencies
 
 - Trilium ETAPI for note traversal
@@ -77,5 +80,5 @@ Disk artifacts store:
 - `espeak-ng` must be installed when using Kokoro for English fallback and phoneme support.
 - Python dependencies should be installed with `uv sync --extra dev --extra tts --extra youtube`.
 - Production installs must preinstall `en_core_web_sm` before the service handles English Kokoro synthesis so the runtime path never depends on spaCy auto-download behavior inside systemd.
-- `.env` must contain valid Trilium, OpenAI, and YouTube settings.
+- `.env` must contain valid Trilium, OpenAI, and YouTube settings. `TRILIUM_PARENT_NOTE_ID` should point to the catalog/root note whose direct children are course notes.
 - Network binding is controlled by `APP_HOST` and `APP_PORT` in `.env`. The production systemd unit now follows the same pattern as the other Python services under `~/code`: `uv run python -m app.serve`, with the application loading `.env` itself before Uvicorn starts.

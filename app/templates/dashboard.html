@@ -3,22 +3,22 @@
 {% block content %}
 {% if flash_level == "error" and flash_message %}
 <section class="panel error-panel">
-  <h3>Course Sync Failed</h3>
+  <h3>Action Failed</h3>
   <p>{{ flash_message }}</p>
 </section>
 {% endif %}
 <section class="panel hero">
   <div>
-    <p class="eyebrow">Configured course</p>
-    <h2>{{ course.title }}</h2>
-    <p class="muted">Parent note ID: {{ course.trilium_note_id }}</p>
+    <p class="eyebrow">Course catalog</p>
+    <h2>Trilium Courses</h2>
+    <p class="muted">Catalog root note ID: {{ catalog_root_id }}</p>
   </div>
   <form method="post" action="/courses/sync">
     <label class="stack-field">
-      <span>Parent note ID</span>
-      <input type="text" name="parent_note_id" value="{{ course.trilium_note_id }}" />
+      <span>Catalog root note ID</span>
+      <input type="text" name="parent_note_id" value="{{ catalog_root_id }}" />
     </label>
-    <button type="submit">Discover Lessons</button>
+    <button type="submit">Discover Courses</button>
   </form>
 </section>
 
@@ -42,13 +42,18 @@
   </div>
 </section>
 
-<section class="panel">
+{% if course_groups %}
+{% for group in course_groups %}
+{% set course = group.course %}
+{% set lessons = group.lessons %}
+<section class="panel course-section" data-course-id="{{ course.id }}">
   <div class="bulk-actions">
     <div>
-      <h3>Lessons</h3>
-      <p class="muted">Direct child notes under the selected parent are treated as lessons.</p>
+      <p class="eyebrow">Course</p>
+      <h3>{{ course.title }}</h3>
+      <p class="muted">Course note ID: {{ course.trilium_note_id }}. Direct child notes are treated as lessons.</p>
     </div>
-    <form id="bulk-generate-form" method="post" action="/courses/generate" class="bulk-controls">
+    <form id="bulk-generate-form-{{ course.id }}" method="post" action="/courses/generate" class="bulk-controls">
       <button type="submit">Generate From Last Done Selected</button>
       <button type="submit" name="force_regenerate" value="true">Force Generate All Selected</button>
     </form>
@@ -57,7 +62,7 @@
   {% for lesson in lessons %}
   {% set status = lesson_statuses.get(lesson.id) %}
   <article class="panel lesson-card">
-    <label class="lesson-selector checkbox"><input type="checkbox" name="lesson_ids" value="{{ lesson.id }}" form="bulk-generate-form" /> Select</label>
+    <label class="lesson-selector checkbox"><input type="checkbox" name="lesson_ids" value="{{ lesson.id }}" form="bulk-generate-form-{{ course.id }}" /> Select</label>
     <div class="lesson-top">
       <h3>{{ lesson.title }}</h3>
       <div class="lesson-top-side">
@@ -131,12 +136,19 @@
   </article>
   {% else %}
   <article class="panel empty-state">
-    <h3>No lessons yet</h3>
-    <p>Discover lessons to fetch the direct child notes from Trilium.</p>
+    <h3>No active lessons</h3>
+    <p>Sync the catalog again after adding direct child notes to this course in Trilium.</p>
   </article>
   {% endfor %}
   </section>
 </section>
+{% endfor %}
+{% else %}
+<section class="panel empty-state">
+  <h3>No courses yet</h3>
+  <p>Discover courses to fetch the direct child course notes from the configured Trilium catalog root.</p>
+</section>
+{% endif %}
 
 <aside class="error-banner hidden" data-error-banner>
   <div class="error-banner-copy">
@@ -201,7 +213,8 @@
       if (!response.ok) return;
       const payload = await response.json();
       renderRuntimeChecks(payload.runtime_checks || []);
-      for (const lesson of payload.lessons) {
+      const lessons = (payload.courses || []).flatMap((course) => course.lessons || []);
+      for (const lesson of lessons) {
         const root = document.querySelector(`[data-lesson-id="${lesson.id}"]`);
         if (!root) continue;
         const pill = root.closest(".lesson-card")?.querySelector("[data-stage-pill]");

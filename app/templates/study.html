@@ -202,6 +202,18 @@
       burst?.classList.add("hidden");
     };
 
+    const clearFlashcardContent = () => {
+      const prompt = document.querySelector("[data-flashcard-prompt]");
+      const answer = document.querySelector("[data-flashcard-answer]");
+      const excerpt = document.querySelector("[data-flashcard-excerpt]");
+      if (prompt) prompt.textContent = "";
+      if (answer) answer.textContent = "";
+      if (excerpt) {
+        excerpt.textContent = "";
+        setHidden(excerpt, true);
+      }
+    };
+
     const resetFlashcardFace = (instant = false) => {
       if (!flashcardEl) return;
       if (!instant) {
@@ -254,7 +266,6 @@
 
       setHidden(activeRegion, false);
       setHidden(emptyRegion, true);
-      resetFlashcardFace(true);
       if (prompt) prompt.textContent = card.prompt;
       if (answer) answer.textContent = card.answer;
       if (excerpt) {
@@ -271,6 +282,7 @@
         }
       }
       form.action = card.review_url;
+      resetFlashcardFace(true);
       resetCelebration();
       syncReviewButtons();
     };
@@ -279,6 +291,7 @@
       if (submitting) return;
       submitting = true;
       if (!celebrating) {
+        clearFlashcardContent();
         resetFlashcardFace(true);
       }
       syncReviewButtons();

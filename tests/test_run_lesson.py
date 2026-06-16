@@ -7,7 +7,7 @@ from app.db import Base, make_session_factory
 from app.jobs import PipelineServices
 from app.models import Course, Lesson
 from app.pipeline import GeneratedFlashcard, GeneratedScript, GeneratedUpload
-from app.run_lesson import lesson_workspace_relpaths, run_lessons
+from app.run_lesson import lesson_workspace_relpaths, list_lessons, run_lessons
 
 
 class FakeCollector:
@@ -114,3 +114,39 @@ def test_lesson_workspace_relpaths(tmp_path: Path):
     paths = lesson_workspace_relpaths(settings, [lesson_id])
     assert len(paths) == 1
     assert paths[0] == "course/course-lesson-1-lesson-1"
+
+
+def test_list_lessons_hides_archived_by_default(tmp_path: Path, capsys):
+    settings = make_settings(tmp_path)
+    session_factory, engine = make_session_factory(settings)
+    Base.metadata.create_all(bind=engine)
+
+    with session_factory() as session:
+        course = Course(trilium_note_id="course", title="Course", parent_note_id="catalog", traversal_hash="course")
+        session.add(course)
+        session.flush()
+        session.add(
+            Lesson(course_id=course.id, trilium_note_id="lesson-1", title="Lesson 1", parent_note_id="course", content_hash="")
+        )
+        session.add(
+            Lesson(
+                course_id=course.id,
+                trilium_note_id="lesson-2",
+                title="Lesson 2",
+                parent_note_id="course",
+                content_hash="",
+                archived_at=course.created_at,
+            )
+        )
+        session.commit()
+
+    list_lessons(settings)
+    active_output = capsys.readouterr().out
+    assert "Course / Lesson 1" in active_output
+    assert "Lesson 2" not in active_output
+
+    list_lessons(settings, include_archived=True)
+    archived_output = capsys.readouterr().out
+    assert "Course / Lesson 1" in archived_output
+    assert "Course / Lesson 2" in archived_output
+    assert "yes" in archived_output

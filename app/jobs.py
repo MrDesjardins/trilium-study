@@ -195,7 +195,9 @@ class JobRunner:
             course = session.get(Course, job.course_id) if job else None
             if job is None or course is None:
                 return
-            lessons = session.scalars(select(Lesson).where(Lesson.course_id == course.id)).all()
+            lessons = session.scalars(
+                select(Lesson).where(Lesson.course_id == course.id, Lesson.archived_at.is_(None))
+            ).all()
             for lesson in lessons:
                 lesson_job_id = self.create_lesson_job(course.id, lesson.id, force_regenerate=job.force_regenerate)
                 self._event(session, job, "lesson_enqueued", f"Enqueued lesson job {lesson_job_id} for {lesson.title}")

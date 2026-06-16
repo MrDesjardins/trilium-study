@@ -85,18 +85,95 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         finally:
             session.close()
 
-    def get_or_create_default_course(session: Session) -> Course:
-        course = session.scalar(select(Course).order_by(Course.created_at.asc()))
-        if course is None:
-            course = Course(
-                trilium_note_id=settings.trilium_parent_note_id,
-                title="Configured Trilium Course",
-                parent_note_id=None,
-                traversal_hash=settings.trilium_parent_note_id,
-            )
-            session.add(course)
-            session.flush()
-        return course
+    def active_courses_query():
+        return select(Course).where(Course.archived_at.is_(None)).order_by(Course.title.asc(), Course.created_at.asc())
+
+    def active_lessons_query(course_id: int):
+        return (
+            select(Lesson)
+            .where(Lesson.course_id == course_id, Lesson.archived_at.is_(None))
+            .order_by(Lesson.created_at.asc())
+        )
+
+    def grouped_courses(session: Session) -> list[dict]:
+        courses = session.scalars(active_courses_query()).all()
+        return [{"course": course, "lessons": session.scalars(active_lessons_query(course.id)).all()} for course in courses]
+
+    async def sync_catalog(parent_note_id: str, session: Session) -> tuple[int, int, int, int]:
+        client = TriliumClient(settings.trilium_url, settings.trilium_etapi_token)
+        catalog_note = await client.get_note(parent_note_id)
+        course_notes = await client.get_course_lessons(parent_note_id)
+        now = datetime.now(timezone.utc)
+        active_course_note_ids: set[str] = set()
+        active_lesson_count = 0
+        archived_course_count = 0
+        archived_lesson_count = 0
+
+        for course_note in course_notes:
+            course_note_id = course_note["noteId"]
+            active_course_note_ids.add(course_note_id)
+            course = session.scalar(select(Course).where(Course.trilium_note_id == course_note_id))
+            if course is None:
+                course = Course(
+                    trilium_note_id=course_note_id,
+                    title=course_note.get("title", course_note_id),
+                    parent_note_id=parent_note_id,
+                    traversal_hash=course_note_id,
+                    last_synced_at=now,
+                )
+                session.add(course)
+                session.flush()
+            else:
+                course.title = course_note.get("title", course.title)
+                course.parent_note_id = parent_note_id
+                course.traversal_hash = course_note_id
+                course.last_synced_at = now
+                course.archived_at = None
+
+            lesson_notes = await client.get_course_lessons(course_note_id)
+            active_lesson_note_ids: set[str] = set()
+            for lesson_note in lesson_notes:
+                lesson_note_id = lesson_note["noteId"]
+                active_lesson_note_ids.add(lesson_note_id)
+                active_lesson_count += 1
+                lesson = session.scalar(
+                    select(Lesson).where(Lesson.course_id == course.id, Lesson.trilium_note_id == lesson_note_id)
+                )
+                if lesson is None:
+                    session.add(
+                        Lesson(
+                            course_id=course.id,
+                            trilium_note_id=lesson_note_id,
+                            title=lesson_note.get("title", lesson_note_id),
+                            parent_note_id=course.trilium_note_id,
+                            content_hash="",
+                            stage="pending",
+                            stage_state="pending",
+                        )
+                    )
+                else:
+                    lesson.title = lesson_note.get("title", lesson.title)
+                    lesson.parent_note_id = course.trilium_note_id
+                    lesson.archived_at = None
+
+            for lesson in session.scalars(select(Lesson).where(Lesson.course_id == course.id)).all():
+                if lesson.trilium_note_id not in active_lesson_note_ids and lesson.archived_at is None:
+                    lesson.archived_at = now
+                    archived_lesson_count += 1
+
+        for course in session.scalars(select(Course)).all():
+            if course.trilium_note_id not in active_course_note_ids and course.archived_at is None:
+                course.archived_at = now
+                archived_course_count += 1
+                for lesson in course.lessons:
+                    if lesson.archived_at is None:
+                        lesson.archived_at = now
+                        archived_lesson_count += 1
+
+        if not course_notes:
+            # Validate the catalog note ID even when it has no children.
+            catalog_note.get("title")
+        return len(course_notes), active_lesson_count, archived_course_count, archived_lesson_count
 
     def pop_flash(request: Request) -> tuple[str | None, str | None]:
         flash_level = request.cookies.get("flash_level")
@@ -240,8 +317,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/", response_class=HTMLResponse)
     async def dashboard(request: Request, db: Session = Depends(get_db)):
-        course = get_or_create_default_course(db)
-        lessons = db.scalars(select(Lesson).where(Lesson.course_id == course.id).order_by(Lesson.created_at)).all()
+        course_groups = grouped_courses(db)
+        lessons = [lesson for group in course_groups for lesson in group["lessons"]]
         jobs = db.scalars(select(JobEvent).order_by(JobEvent.created_at.desc()).limit(25)).all()
         queue_map = queue_positions(db)
         lesson_statuses = {lesson.id: lesson_status_payload(db, lesson, queue_map) for lesson in lessons}
@@ -253,8 +330,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "dashboard.html",
             {
                 "request": request,
-                "course": course,
-                "lessons": lessons,
+                "catalog_root_id": settings.trilium_parent_note_id,
+                "course_groups": course_groups,
                 "lesson_statuses": lesson_statuses,
                 "events": jobs,
                 "now": datetime.now(timezone.utc),
@@ -271,43 +348,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/courses/sync")
     async def sync_course(parent_note_id: str = Form(default=""), db: Session = Depends(get_db)):
-        course = get_or_create_default_course(db)
-        parent_note_id = (parent_note_id or course.trilium_note_id).strip()
-        client = TriliumClient(settings.trilium_url, settings.trilium_etapi_token)
+        parent_note_id = (parent_note_id or settings.trilium_parent_note_id).strip()
         try:
-            parent_note = await client.get_note(parent_note_id)
-            lesson_notes = await client.get_course_lessons(parent_note_id)
+            course_count, lesson_count, archived_course_count, archived_lesson_count = await sync_catalog(parent_note_id, db)
         except TriliumClientError as exc:
             return redirect_with_flash("/", str(exc), level="error")
-        course.trilium_note_id = parent_note_id
-        course.title = parent_note.get("title", course.title)
-        course.traversal_hash = parent_note_id
-        note_ids = set()
-        for note in lesson_notes:
-            note_id = note["noteId"]
-            note_ids.add(note_id)
-            existing = db.scalar(select(Lesson).where(Lesson.course_id == course.id, Lesson.trilium_note_id == note_id))
-            if existing is None:
-                db.add(
-                    Lesson(
-                        course_id=course.id,
-                        trilium_note_id=note_id,
-                        title=note.get("title", note_id),
-                        parent_note_id=course.trilium_note_id,
-                        content_hash="",
-                        stage="pending",
-                        stage_state="pending",
-                    )
-                )
-            else:
-                existing.title = note.get("title", existing.title)
-        for lesson in db.scalars(select(Lesson).where(Lesson.course_id == course.id)).all():
-            if lesson.trilium_note_id not in note_ids:
-                db.delete(lesson)
         db.commit()
-        if not lesson_notes:
-            return redirect_with_flash("/", f"No direct child lessons found under note {parent_note_id}.")
-        return redirect_with_flash("/", f"Discovered {len(lesson_notes)} direct child lessons under {parent_note_id}.")
+        if course_count == 0:
+            return redirect_with_flash("/", f"No direct child courses found under catalog note {parent_note_id}.")
+        archive_note = ""
+        if archived_course_count or archived_lesson_count:
+            archive_note = f" Archived {archived_course_count} course(s) and {archived_lesson_count} lesson(s)."
+        return redirect_with_flash(
+            "/",
+            f"Discovered {course_count} course(s) and {lesson_count} lesson(s) under catalog note {parent_note_id}.{archive_note}",
+        )
 
     @app.post("/courses/generate")
     async def generate_selected_lessons(
@@ -316,9 +371,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         db: Session = Depends(get_db),
     ):
         selected = [db.get(Lesson, lesson_id) for lesson_id in lesson_ids]
-        selected_lessons = [lesson for lesson in selected if lesson is not None]
+        selected_lessons = [lesson for lesson in selected if lesson is not None and lesson.archived_at is None]
         if not selected_lessons:
-            return redirect_with_flash("/", "No lessons selected for generation.")
+            return redirect_with_flash("/", "No active lessons selected for generation.")
         for lesson in selected_lessons:
             runner.create_lesson_job(lesson.course_id, lesson.id, force_regenerate=force_regenerate)
         return redirect_with_flash("/", f"Queued {len(selected_lessons)} lesson generation job(s).")
@@ -328,6 +383,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lesson = db.get(Lesson, lesson_id)
         if lesson is None:
             raise HTTPException(status_code=404, detail="Lesson not found")
+        if lesson.archived_at is not None:
+            return redirect_with_flash("/", f"Archived lesson '{lesson.title}' cannot be generated.", level="error")
         runner.create_lesson_job(lesson.course_id, lesson.id, force_regenerate=force_regenerate)
         return redirect_with_flash("/", f"Queued lesson '{lesson.title}' for generation.")
 
@@ -353,11 +410,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/dashboard")
     async def dashboard_api(db: Session = Depends(get_db)):
-        course = get_or_create_default_course(db)
-        lessons = db.scalars(select(Lesson).where(Lesson.course_id == course.id).order_by(Lesson.created_at)).all()
         queue_map = queue_positions(db)
+        course_payloads = []
+        for group in grouped_courses(db):
+            course = group["course"]
+            course_payloads.append(
+                {
+                    "id": course.id,
+                    "title": course.title,
+                    "trilium_note_id": course.trilium_note_id,
+                    "lessons": [lesson_status_payload(db, lesson, queue_map) for lesson in group["lessons"]],
+                }
+            )
         return {
-            "lessons": [lesson_status_payload(db, lesson, queue_map) for lesson in lessons],
+            "catalog_root_id": settings.trilium_parent_note_id,
+            "courses": course_payloads,
             "runtime_checks": [check.__dict__ for check in runtime_checks(settings)],
         }
 

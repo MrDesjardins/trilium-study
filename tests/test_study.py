@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+from sqlalchemy import func, select
 
 from app.config import Settings
 from app.db import Base, make_session_factory
@@ -269,6 +270,147 @@ def test_dashboard_shows_job_events_in_los_angeles_time(tmp_path: Path):
 
     assert response.status_code == 200
     assert "2026-05-27 11:30:00 PM PDT" in response.text
+
+
+def test_catalog_sync_creates_courses_and_archives_missing_state(monkeypatch, tmp_path: Path):
+    settings = make_settings(tmp_path)
+    session_factory, engine = make_session_factory(settings)
+    Base.metadata.create_all(bind=engine)
+
+    with session_factory() as session:
+        old_course = Course(trilium_note_id="old-course", title="Old Course", parent_note_id=None, traversal_hash="old-course")
+        session.add(old_course)
+        session.flush()
+        old_lesson = Lesson(
+            course_id=old_course.id,
+            trilium_note_id="old-lesson",
+            title="Old Lesson",
+            parent_note_id="old-course",
+            content_hash="hash",
+        )
+        session.add(old_lesson)
+        session.flush()
+        session.add(Flashcard(lesson_id=old_lesson.id, prompt="Old Q", answer="Old A"))
+        session.add(YouTubeUpload(lesson_id=old_lesson.id, video_id="old", video_url="https://youtube.com/watch?v=old"))
+        session.commit()
+        old_course_id = old_course.id
+        old_lesson_id = old_lesson.id
+
+    class FakeTriliumClient:
+        def __init__(self, *_args):
+            self.notes = {
+                "catalog": {"noteId": "catalog", "title": "Catalog", "childNoteIds": ["course-a", "course-b"]},
+                "course-a": {"noteId": "course-a", "title": "Course A", "childNoteIds": ["lesson-a1", "lesson-a2"]},
+                "course-b": {"noteId": "course-b", "title": "Course B", "childNoteIds": ["lesson-b1"]},
+                "lesson-a1": {"noteId": "lesson-a1", "title": "Lesson A1", "childNoteIds": []},
+                "lesson-a2": {"noteId": "lesson-a2", "title": "Lesson A2", "childNoteIds": []},
+                "lesson-b1": {"noteId": "lesson-b1", "title": "Lesson B1", "childNoteIds": []},
+            }
+
+        async def get_note(self, note_id: str):
+            return self.notes[note_id]
+
+        async def get_course_lessons(self, parent_note_id: str):
+            note = self.notes[parent_note_id]
+            return [self.notes[child_id] for child_id in note["childNoteIds"]]
+
+    monkeypatch.setattr("app.main.TriliumClient", FakeTriliumClient)
+
+    app = create_app(settings)
+    with TestClient(app) as client:
+        response = client.post("/courses/sync", data={"parent_note_id": "catalog"}, follow_redirects=True)
+
+    assert response.status_code == 200
+    assert "Discovered 2 course(s) and 3 lesson(s)" in response.text
+    with session_factory() as session:
+        active_courses = session.scalars(select(Course).where(Course.archived_at.is_(None)).order_by(Course.trilium_note_id)).all()
+        assert [course.trilium_note_id for course in active_courses] == ["course-a", "course-b"]
+        assert {lesson.trilium_note_id for lesson in session.scalars(select(Lesson).where(Lesson.archived_at.is_(None))).all()} == {
+            "lesson-a1",
+            "lesson-a2",
+            "lesson-b1",
+        }
+        assert session.get(Course, old_course_id).archived_at is not None
+        assert session.get(Lesson, old_lesson_id).archived_at is not None
+        assert session.scalar(select(func.count()).select_from(Flashcard)) == 1
+        assert session.scalar(select(func.count()).select_from(YouTubeUpload)) == 1
+
+
+def test_dashboard_api_groups_courses_and_excludes_archived_lessons(tmp_path: Path):
+    settings = make_settings(tmp_path)
+    session_factory, engine = make_session_factory(settings)
+    Base.metadata.create_all(bind=engine)
+
+    with session_factory() as session:
+        course = Course(trilium_note_id="course-a", title="Course A", parent_note_id="catalog", traversal_hash="course-a")
+        archived_course = Course(
+            trilium_note_id="course-z",
+            title="Course Z",
+            parent_note_id="catalog",
+            traversal_hash="course-z",
+            archived_at=datetime.now(timezone.utc),
+        )
+        session.add_all([course, archived_course])
+        session.flush()
+        active_lesson = Lesson(course_id=course.id, trilium_note_id="lesson-a", title="Lesson A", parent_note_id="course-a", content_hash="")
+        archived_lesson = Lesson(
+            course_id=course.id,
+            trilium_note_id="lesson-old",
+            title="Old Lesson",
+            parent_note_id="course-a",
+            content_hash="",
+            archived_at=datetime.now(timezone.utc),
+        )
+        hidden_lesson = Lesson(
+            course_id=archived_course.id,
+            trilium_note_id="lesson-z",
+            title="Lesson Z",
+            parent_note_id="course-z",
+            content_hash="",
+        )
+        session.add_all([active_lesson, archived_lesson, hidden_lesson])
+        session.commit()
+
+    app = create_app(settings)
+    with TestClient(app) as client:
+        response = client.get("/api/dashboard")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [course["title"] for course in payload["courses"]] == ["Course A"]
+    assert [lesson["title"] for lesson in payload["courses"][0]["lessons"]] == ["Lesson A"]
+
+
+def test_archived_lesson_cannot_be_generated(tmp_path: Path):
+    settings = make_settings(tmp_path)
+    session_factory, engine = make_session_factory(settings)
+    Base.metadata.create_all(bind=engine)
+
+    with session_factory() as session:
+        course = Course(trilium_note_id="course", title="Course", parent_note_id="catalog", traversal_hash="course")
+        session.add(course)
+        session.flush()
+        lesson = Lesson(
+            course_id=course.id,
+            trilium_note_id="lesson-1",
+            title="Lesson 1",
+            parent_note_id="course",
+            content_hash="",
+            archived_at=datetime.now(timezone.utc),
+        )
+        session.add(lesson)
+        session.commit()
+        lesson_id = lesson.id
+
+    app = create_app(settings)
+    with TestClient(app) as client:
+        response = client.post(f"/lessons/{lesson_id}/run", follow_redirects=True)
+
+    assert response.status_code == 200
+    assert "Archived lesson" in response.text
+    assert "cannot be generated." in response.text
+    with session_factory() as session:
+        assert session.scalar(select(func.count()).select_from(Job)) == 0
 
 
 def test_queue_audio_lesson_requires_youtube_upload(tmp_path: Path):

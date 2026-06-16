@@ -19,6 +19,10 @@ The repository currently verifies:
 - durable lesson job failure path
 - automatic retry scheduling for transient lesson job failures
 - local lesson CLI generation path and workspace path resolution
+- catalog-root sync that creates multiple courses
+- archive preservation for courses and lessons missing from Trilium sync
+- grouped multi-course dashboard API behavior
+- archived lesson generation safeguards
 - progress and ETA helper behavior
 
 Run the current test suite with:
@@ -37,7 +41,7 @@ For meaningful changes, verify the smallest relevant set below:
 
 ## Recommended Manual Checks
 
-1. Sync a course from Trilium and confirm direct-child lesson discovery.
+1. Sync the catalog root from Trilium and confirm direct-child course discovery plus per-course direct-child lesson discovery.
 2. Run a lesson and confirm script, flashcards, audio, video, and upload metadata are persisted.
 3. Confirm a long normalized lesson does not produce a short summary script and that estimated narration length is visible in lesson details.
 4. Re-run a completed lesson and confirm unchanged stages are skipped.
@@ -45,6 +49,7 @@ For meaningful changes, verify the smallest relevant set below:
 6. Review flashcards in the UI and confirm due-date updates persist.
 7. Clear the due queue, then confirm browse mode still exposes the full deck and reset requeues every card.
 8. Intentionally fail a recoverable pipeline dependency once and confirm the lesson auto-retries, then remains resumable if retries are exhausted.
+9. Remove a course or lesson from the Trilium catalog hierarchy, sync, and confirm it is hidden but its generated state is not deleted.
 
 ## Gaps
 

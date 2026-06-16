@@ -21,6 +21,7 @@ class Course(Base):
     parent_note_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     traversal_hash: Mapped[str] = mapped_column(String(64))
     last_synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
@@ -49,6 +50,7 @@ class Lesson(Base):
     video_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     current_job_id: Mapped[int | None] = mapped_column(ForeignKey("jobs.id"), nullable=True)
     last_processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 

@@ -51,20 +51,26 @@ def lesson_workspace_relpaths(settings: Settings, lesson_ids: list[int]) -> list
     return paths
 
 
-def list_lessons(settings: Settings) -> None:
+def list_lessons(settings: Settings, *, include_archived: bool = False) -> None:
     session_factory, _ = make_session_factory(settings)
     bootstrap_database(settings)
     with session_factory() as session:
-        rows = session.execute(
-            select(Lesson.id, Lesson.title, Lesson.stage, Lesson.stage_state).order_by(Lesson.id)
-        ).all()
+        query = (
+            select(Lesson.id, Course.title, Lesson.title, Lesson.stage, Lesson.stage_state, Lesson.archived_at)
+            .join(Course, Course.id == Lesson.course_id)
+            .order_by(Course.title, Lesson.id)
+        )
+        if not include_archived:
+            query = query.where(Lesson.archived_at.is_(None), Course.archived_at.is_(None))
+        rows = session.execute(query).all()
     if not rows:
         print("No lessons found.")
         return
-    print(f"{'ID':>6}  {'Stage':<12}  {'State':<12}  Title")
-    print("-" * 72)
-    for lesson_id, title, stage, stage_state in rows:
-        print(f"{lesson_id:>6}  {stage:<12}  {stage_state:<12}  {title}")
+    print(f"{'ID':>6}  {'Stage':<12}  {'State':<12}  {'Archived':<8}  Course / Title")
+    print("-" * 100)
+    for lesson_id, course_title, title, stage, stage_state, archived_at in rows:
+        archived = "yes" if archived_at else "no"
+        print(f"{lesson_id:>6}  {stage:<12}  {stage_state:<12}  {archived:<8}  {course_title} / {title}")
 
 
 def run_lessons(settings: Settings, lesson_ids: list[int], *, force_regenerate: bool = False) -> None:
@@ -79,6 +85,8 @@ def run_lessons(settings: Settings, lesson_ids: list[int], *, force_regenerate: 
             lesson = session.get(Lesson, lesson_id)
             if lesson is None:
                 raise SystemExit(f"Lesson {lesson_id} not found in database")
+            if lesson.archived_at is not None:
+                raise SystemExit(f"Lesson {lesson_id} is archived and cannot be generated")
             title = lesson.title
             course_id = lesson.course_id
 
@@ -108,6 +116,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--list", action="store_true", help="List lessons in the configured database.")
     parser.add_argument(
+        "--include-archived",
+        action="store_true",
+        help="Include archived lessons when listing lessons.",
+    )
+    parser.add_argument(
         "--workspace-dirs",
         nargs="+",
         type=int,
@@ -128,7 +141,7 @@ def main() -> None:
     settings = get_settings()
 
     if args.list:
-        list_lessons(settings)
+        list_lessons(settings, include_archived=args.include_archived)
         return
 
     if args.workspace_dirs:

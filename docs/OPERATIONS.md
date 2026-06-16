@@ -10,6 +10,17 @@ uv run python -m app.bootstrap
 
 `app.bootstrap` now runs Alembic migrations to bring the SQLite schema to the current revision.
 
+`TRILIUM_PARENT_NOTE_ID` should point to a Trilium catalog/root note. The app treats each direct child of that catalog root as a course, then treats each direct child of a course note as a lesson.
+
+Before the first sync after moving from a single-course setup to a catalog-root setup, back up runtime state:
+
+```bash
+cp .state/trilium-study.db .state/trilium-study.before-catalog-sync.db
+cp -a .state/workspace .state/workspace.before-catalog-sync
+```
+
+Catalog sync does not delete courses or lessons that disappear from Trilium. It archives and hides them so generated artifacts, flashcards, upload records, and review history are preserved.
+
 System packages required on Linux:
 
 ```bash
@@ -213,6 +224,12 @@ List lessons from production:
 
 ```bash
 ./scripts/generate-local-prod.sh --list
+```
+
+Archived lessons are hidden from normal lesson listings and cannot be generated. Use the local CLI with `--include-archived` when you need to inspect old archived lesson IDs:
+
+```bash
+uv run python -m app.run_lesson --list --include-archived
 ```
 
 Generate one or more lessons:
