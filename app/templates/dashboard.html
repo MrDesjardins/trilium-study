@@ -61,6 +61,13 @@
       </span>
     </div>
     <div class="course-chip-row">
+      {% set legacy = legacy_media.get(course.id) %}
+      {% if legacy and legacy.youtube_url %}
+      <span class="stage completed legacy-chip">▶ Course video</span>
+      {% endif %}
+      {% if legacy and legacy.flashcard_count %}
+      <span class="stage completed legacy-chip">{{ legacy.flashcard_count }} flashcards</span>
+      {% endif %}
       <span class="stage completed" data-chip-completed>{{ summary.completed }} done</span>
       <span class="stage running {% if not summary.active %}hidden{% endif %}" data-chip-active>{{ summary.active }} in progress</span>
       <span class="stage failed {% if not summary.failed %}hidden{% endif %}" data-chip-failed>{{ summary.failed }} failed</span>

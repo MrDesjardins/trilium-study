@@ -446,6 +446,58 @@ def test_course_page_shows_active_lessons_and_excludes_archived(tmp_path: Path):
     assert missing.status_code == 404
 
 
+def test_course_promoted_from_lesson_shows_legacy_video_and_flashcards(tmp_path: Path):
+    settings = make_settings(tmp_path)
+    session_factory, engine = make_session_factory(settings)
+    Base.metadata.create_all(bind=engine)
+
+    with session_factory() as session:
+        old_course = Course(
+            trilium_note_id="old-course",
+            title="Introduction to Philosophy",
+            parent_note_id="catalog",
+            traversal_hash="old-course",
+            archived_at=datetime.now(timezone.utc),
+        )
+        session.add(old_course)
+        session.flush()
+        legacy_lesson = Lesson(
+            course_id=old_course.id,
+            trilium_note_id="note-shared",
+            title="What is Philosophy?",
+            parent_note_id="old-course",
+            content_hash="",
+            stage="publish",
+            stage_state="completed",
+            archived_at=datetime.now(timezone.utc),
+        )
+        session.add(legacy_lesson)
+        session.flush()
+        session.add(YouTubeUpload(lesson_id=legacy_lesson.id, video_id="abc123", video_url="https://www.youtube.com/watch?v=abc123"))
+        session.add(Flashcard(lesson_id=legacy_lesson.id, prompt="Q1", answer="A1"))
+        session.add(Flashcard(lesson_id=legacy_lesson.id, prompt="Q2", answer="A2", suspended=True))
+
+        new_course = Course(trilium_note_id="note-shared", title="What is Philosophy?", parent_note_id="class-a", traversal_hash="note-shared")
+        session.add(new_course)
+        session.flush()
+        session.add(Lesson(course_id=new_course.id, trilium_note_id="sub-note", title="Subtopic", parent_note_id="note-shared", content_hash=""))
+        session.commit()
+        new_course_id = new_course.id
+
+    app = create_app(settings)
+    with TestClient(app) as client:
+        dashboard = client.get("/")
+        course_page = client.get(f"/courses/{new_course_id}")
+
+    assert dashboard.status_code == 200
+    assert "Course video" in dashboard.text
+    assert "1 flashcards" in dashboard.text
+    assert course_page.status_code == 200
+    assert "https://www.youtube.com/watch?v=abc123" in course_page.text
+    assert "1 flashcard in the study deck" in course_page.text
+    assert "Generated for the whole course before lessons were split out." in course_page.text
+
+
 def test_lesson_detail_page_shows_breadcrumb_to_course(tmp_path: Path):
     settings = make_settings(tmp_path)
     session_factory, engine = make_session_factory(settings)

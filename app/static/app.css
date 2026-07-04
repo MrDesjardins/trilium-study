@@ -192,6 +192,24 @@ nav a {
   gap: 8px;
   flex-wrap: wrap;
 }
+.legacy-media-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+.legacy-flashcards {
+  font-weight: 700;
+  background: rgba(104, 245, 222, 0.16);
+  padding: 8px 12px;
+  border-radius: 999px;
+  box-shadow: inset 2px 2px 6px rgba(255,255,255,0.24), inset -2px -2px 6px rgba(119,43,31,0.12);
+}
+.legacy-media-note {
+  margin: 6px 0 0;
+  font-size: 0.85rem;
+}
 
 .bulk-actions {
   display: flex;

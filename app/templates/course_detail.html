@@ -20,6 +20,28 @@
     <h2>{{ course.title }}</h2>
     <p class="muted">Course note ID: {{ course.trilium_note_id }}. Direct child notes are treated as lessons.</p>
     <p class="muted">{{ summary.total }} lesson{{ "s" if summary.total != 1 else "" }} · {{ summary.completed }} done{% if summary.active %} · {{ summary.active }} in progress{% endif %}{% if summary.failed %} · {{ summary.failed }} failed{% endif %}</p>
+    {% if legacy_media %}
+    <div class="legacy-media-row">
+      {% if legacy_media.youtube_url %}
+      <a
+        class="youtube-link"
+        href="{{ legacy_media.youtube_url }}"
+        target="_blank"
+        rel="noreferrer"
+        aria-label="Open the generated course video for {{ course.title }}"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M23.5 6.2a3 3 0 0 0-2.1-2.1C19.5 3.5 12 3.5 12 3.5s-7.5 0-9.4.6A3 3 0 0 0 .5 6.2 31.4 31.4 0 0 0 0 12a31.4 31.4 0 0 0 .5 5.8 3 3 0 0 0 2.1 2.1c1.9.6 9.4.6 9.4.6s7.5 0 9.4-.6a3 3 0 0 0 2.1-2.1A31.4 31.4 0 0 0 24 12a31.4 31.4 0 0 0-.5-5.8ZM9.6 15.7V8.3l6.3 3.7-6.3 3.7Z" />
+        </svg>
+        <span>Course video</span>
+      </a>
+      {% endif %}
+      {% if legacy_media.flashcard_count %}
+      <span class="legacy-flashcards">{{ legacy_media.flashcard_count }} flashcard{{ "s" if legacy_media.flashcard_count != 1 else "" }} in the study deck</span>
+      {% endif %}
+    </div>
+    <p class="muted legacy-media-note">Generated for the whole course before lessons were split out.</p>
+    {% endif %}
   </div>
   <form id="bulk-generate-form" method="post" action="/courses/generate" class="bulk-controls">
     <label class="checkbox"><input type="checkbox" data-select-all /> Select all</label>

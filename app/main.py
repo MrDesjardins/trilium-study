@@ -121,6 +121,32 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         counts["percent"] = round(counts["completed"] * 100 / total) if total else 0
         return counts
 
+    def legacy_media_by_course(session: Session, courses: list[Course]) -> dict[int, dict]:
+        """Map course id -> video/flashcards generated for the course note before it became a course.
+
+        Catalog restructures can promote a lesson note to a course note. The archived
+        lesson row keeps the generated artifacts, and its trilium_note_id equals the
+        new course's trilium_note_id, so the association is recomputed here instead of
+        being stored — catalog syncs cannot invalidate it.
+        """
+        note_ids = [course.trilium_note_id for course in courses]
+        if not note_ids:
+            return {}
+        legacy_lessons = session.scalars(
+            select(Lesson).where(Lesson.archived_at.is_not(None), Lesson.trilium_note_id.in_(note_ids))
+        ).all()
+        by_note: dict[str, dict] = {}
+        for lesson in legacy_lessons:
+            youtube_url = lesson.youtube_upload.video_url if lesson.youtube_upload else None
+            flashcard_count = sum(1 for flashcard in lesson.flashcards if not flashcard.suspended)
+            if not youtube_url and not flashcard_count:
+                continue
+            entry = {"youtube_url": youtube_url, "flashcard_count": flashcard_count, "lesson_title": lesson.title}
+            existing = by_note.get(lesson.trilium_note_id)
+            if existing is None or (youtube_url and not existing["youtube_url"]):
+                by_note[lesson.trilium_note_id] = entry
+        return {course.id: by_note[course.trilium_note_id] for course in courses if course.trilium_note_id in by_note}
+
     def pop_flash(request: Request) -> tuple[str | None, str | None]:
         flash_level = request.cookies.get("flash_level")
         flash_message = request.cookies.get("flash_message")
@@ -270,6 +296,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lesson_statuses = {lesson.id: lesson_status_payload(db, lesson, queue_map) for lesson in lessons}
         for group in course_groups:
             group["summary"] = course_summary(group["lessons"], lesson_statuses)
+        legacy_media = legacy_media_by_course(db, [group["course"] for group in course_groups])
         flash_level, flash_message = pop_flash(request)
         checks = runtime_checks(settings)
         failing_runtime_checks = [check for check in checks if not check.ok]
@@ -280,6 +307,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "request": request,
                 "catalog_root_id": settings.trilium_parent_note_id,
                 "course_groups": course_groups,
+                "legacy_media": legacy_media,
                 "lesson_statuses": lesson_statuses,
                 "events": jobs,
                 "now": datetime.now(timezone.utc),
@@ -332,6 +360,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "lessons": lessons,
                 "lesson_statuses": lesson_statuses,
                 "summary": course_summary(lessons, lesson_statuses),
+                "legacy_media": legacy_media_by_course(db, [course]).get(course.id),
                 "flash_level": flash_level,
                 "flash_message": flash_message,
             },
