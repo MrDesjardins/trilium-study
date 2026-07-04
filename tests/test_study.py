@@ -385,6 +385,117 @@ def test_dashboard_api_groups_courses_and_excludes_archived_lessons(tmp_path: Pa
     assert [lesson["title"] for lesson in payload["courses"][0]["lessons"]] == ["Lesson A"]
 
 
+def test_dashboard_links_to_course_pages_instead_of_inline_lessons(tmp_path: Path):
+    settings = make_settings(tmp_path)
+    session_factory, engine = make_session_factory(settings)
+    Base.metadata.create_all(bind=engine)
+
+    with session_factory() as session:
+        course = Course(trilium_note_id="course-a", title="Course A", parent_note_id="catalog", traversal_hash="course-a")
+        session.add(course)
+        session.flush()
+        session.add(Lesson(course_id=course.id, trilium_note_id="lesson-a", title="Lesson A", parent_note_id="course-a", content_hash=""))
+        session.commit()
+        course_id = course.id
+
+    app = create_app(settings)
+    with TestClient(app) as client:
+        response = client.get("/")
+
+    assert response.status_code == 200
+    assert f'href="/courses/{course_id}"' in response.text
+    assert "1 lesson" in response.text
+    assert "Open lesson details" not in response.text
+
+
+def test_course_page_shows_active_lessons_and_excludes_archived(tmp_path: Path):
+    settings = make_settings(tmp_path)
+    session_factory, engine = make_session_factory(settings)
+    Base.metadata.create_all(bind=engine)
+
+    with session_factory() as session:
+        course = Course(trilium_note_id="course-a", title="Course A", parent_note_id="catalog", traversal_hash="course-a")
+        session.add(course)
+        session.flush()
+        active_lesson = Lesson(course_id=course.id, trilium_note_id="lesson-a", title="Lesson A", parent_note_id="course-a", content_hash="")
+        archived_lesson = Lesson(
+            course_id=course.id,
+            trilium_note_id="lesson-old",
+            title="Old Lesson",
+            parent_note_id="course-a",
+            content_hash="",
+            archived_at=datetime.now(timezone.utc),
+        )
+        session.add_all([active_lesson, archived_lesson])
+        session.commit()
+        course_id = course.id
+
+    app = create_app(settings)
+    with TestClient(app) as client:
+        page = client.get(f"/courses/{course_id}")
+        api = client.get(f"/api/courses/{course_id}")
+        missing = client.get("/courses/9999")
+
+    assert page.status_code == 200
+    assert "Course A" in page.text
+    assert "Lesson A" in page.text
+    assert "Old Lesson" not in page.text
+    assert "Open lesson details" in page.text
+    assert api.status_code == 200
+    assert [lesson["title"] for lesson in api.json()["lessons"]] == ["Lesson A"]
+    assert missing.status_code == 404
+
+
+def test_lesson_detail_page_shows_breadcrumb_to_course(tmp_path: Path):
+    settings = make_settings(tmp_path)
+    session_factory, engine = make_session_factory(settings)
+    Base.metadata.create_all(bind=engine)
+
+    with session_factory() as session:
+        course = Course(trilium_note_id="course-a", title="Course A", parent_note_id="catalog", traversal_hash="course-a")
+        session.add(course)
+        session.flush()
+        lesson = Lesson(course_id=course.id, trilium_note_id="lesson-a", title="Lesson A", parent_note_id="course-a", content_hash="")
+        session.add(lesson)
+        session.commit()
+        course_id = course.id
+        lesson_id = lesson.id
+
+    app = create_app(settings)
+    with TestClient(app) as client:
+        response = client.get(f"/lessons/{lesson_id}")
+
+    assert response.status_code == 200
+    assert f'href="/courses/{course_id}"' in response.text
+    assert "Course A" in response.text
+
+
+def test_archived_course_page_returns_404(tmp_path: Path):
+    settings = make_settings(tmp_path)
+    session_factory, engine = make_session_factory(settings)
+    Base.metadata.create_all(bind=engine)
+
+    with session_factory() as session:
+        course = Course(
+            trilium_note_id="course-z",
+            title="Course Z",
+            parent_note_id="catalog",
+            traversal_hash="course-z",
+            archived_at=datetime.now(timezone.utc),
+        )
+        session.add(course)
+        session.commit()
+        course_id = course.id
+
+    app = create_app(settings)
+    with TestClient(app) as client:
+        page = client.get(f"/courses/{course_id}")
+        api = client.get(f"/api/courses/{course_id}")
+
+    assert page.status_code == 404
+    assert api.status_code == 404
+
+
 def test_archived_lesson_cannot_be_generated(tmp_path: Path):
     settings = make_settings(tmp_path)
     session_factory, engine = make_session_factory(settings)

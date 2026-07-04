@@ -43,106 +43,35 @@
 </section>
 
 {% if course_groups %}
-{% for group in course_groups %}
-{% set course = group.course %}
-{% set lessons = group.lessons %}
-<section class="panel course-section" data-course-id="{{ course.id }}">
-  <div class="bulk-actions">
-    <div>
-      <p class="eyebrow">{{ course.class_title or "Course" }}</p>
-      <h3>{{ course.title }}</h3>
-      <p class="muted">Course note ID: {{ course.trilium_note_id }}. Direct child notes are treated as lessons.</p>
-    </div>
-    <form id="bulk-generate-form-{{ course.id }}" method="post" action="/courses/generate" class="bulk-controls">
-      <button type="submit">Generate From Last Done Selected</button>
-      <button type="submit" name="force_regenerate" value="true">Force Generate All Selected</button>
-    </form>
-  </div>
-  <section class="lesson-grid">
-  {% for lesson in lessons %}
-  {% set status = lesson_statuses.get(lesson.id) %}
-  <article class="panel lesson-card">
-    <label class="lesson-selector checkbox"><input type="checkbox" name="lesson_ids" value="{{ lesson.id }}" form="bulk-generate-form-{{ course.id }}" /> Select</label>
-    <div class="lesson-top">
-      <h3>{{ lesson.title }}</h3>
-      <div class="lesson-top-side">
-        <span class="stage {{ status.stage_state if status else lesson.stage_state }}" data-stage-pill>{{ status.stage_state_display if status else lesson.stage_state }}</span>
-        <p class="lesson-link-row {% if not status or not status.youtube_url %}hidden{% endif %}" data-youtube-row>
-          <a
-            class="youtube-link"
-            data-youtube-link
-            href="{{ status.youtube_url if status and status.youtube_url else '#' }}"
-            target="_blank"
-            rel="noreferrer"
-            aria-label="Open uploaded YouTube video for {{ lesson.title }}"
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M23.5 6.2a3 3 0 0 0-2.1-2.1C19.5 3.5 12 3.5 12 3.5s-7.5 0-9.4.6A3 3 0 0 0 .5 6.2 31.4 31.4 0 0 0 0 12a31.4 31.4 0 0 0 .5 5.8 3 3 0 0 0 2.1 2.1c1.9.6 9.4.6 9.4.6s7.5 0 9.4-.6a3 3 0 0 0 2.1-2.1A31.4 31.4 0 0 0 24 12a31.4 31.4 0 0 0-.5-5.8ZM9.6 15.7V8.3l6.3 3.7-6.3 3.7Z" />
-            </svg>
-            <span>YouTube</span>
-          </a>
-        </p>
+<section class="course-grid">
+  {% for group in course_groups %}
+  {% set course = group.course %}
+  {% set summary = group.summary %}
+  <a class="panel course-card" href="/courses/{{ course.id }}" data-course-card="{{ course.id }}" aria-label="Open course {{ course.title }}">
+    <div class="course-card-head">
+      <div class="course-card-copy">
+        <p class="eyebrow">{{ course.class_title or "Course" }}</p>
+        <h3>{{ course.title }}</h3>
+        <p class="muted" data-course-count>{{ summary.total }} lesson{{ "s" if summary.total != 1 else "" }}</p>
       </div>
+      <span class="lesson-detail-arrow" aria-hidden="true">
+        <svg viewBox="0 0 24 24">
+          <path d="M9 6l6 6-6 6" />
+        </svg>
+      </span>
     </div>
-    <div class="lesson-status-block" data-lesson-id="{{ lesson.id }}">
-      <p class="muted" data-stage-text>Stage: {{ status.stage_label if status else (lesson.stage or "pending") }}</p>
-      <p class="muted" data-eta-text>{{ status.eta_label if status else "ETA" }}: {{ status.eta_text if status else "waiting" }}</p>
-      <p class="muted" data-queue-text>{% if status and status.queue_position %}Queue position: {{ status.queue_position }}{% else %}Queue position: active or not queued{% endif %}</p>
-      <div class="progress-track">
-        <div class="progress-fill" style="width: {{ status.progress_percent if status else 0 }}%" data-progress-fill></div>
-      </div>
-      <ol class="stage-list" data-stage-list>
-        {% if status %}
-        {% for step in status.steps %}
-        <li class="stage-step {{ step.state }}">{{ step.label }} <span class="muted">{{ step.state }}</span></li>
-        {% endfor %}
-        {% endif %}
-      </ol>
-      <div class="lesson-error-actions {% if not status or not status.stage_error %}hidden{% endif %}" data-error-actions>
-        <button
-          type="button"
-          class="secondary-button"
-          data-error-trigger
-          data-error-title="{{ lesson.title }}"
-          data-error-message="{{ status.stage_error if status else '' }}"
-        >
-          View error
-        </button>
-      </div>
+    <div class="course-chip-row">
+      <span class="stage completed" data-chip-completed>{{ summary.completed }} done</span>
+      <span class="stage running {% if not summary.active %}hidden{% endif %}" data-chip-active>{{ summary.active }} in progress</span>
+      <span class="stage failed {% if not summary.failed %}hidden{% endif %}" data-chip-failed>{{ summary.failed }} failed</span>
+      <span class="stage {% if not summary.pending %}hidden{% endif %}" data-chip-pending>{{ summary.pending }} pending</span>
     </div>
-    <div class="lesson-actions">
-      <form method="post" action="/lessons/{{ lesson.id }}/run">
-        <button type="submit">Generate From Last Done</button>
-      </form>
-      <form method="post" action="/lessons/{{ lesson.id }}/run">
-        <input type="hidden" name="force_regenerate" value="true" />
-        <button type="submit">Force Generate All</button>
-      </form>
-      <form method="post" action="/lessons/{{ lesson.id }}/queue-audio" class="lesson-audio-queue-form {% if not status or not status.youtube_url %}hidden{% endif %}" data-audio-queue-form>
-        <button type="submit" class="secondary-button">Queue audio stream</button>
-      </form>
-      <a class="lesson-detail-link" href="/lessons/{{ lesson.id }}" aria-label="Open lesson details for {{ lesson.title }}">
-        <span class="lesson-detail-copy">
-          <span class="lesson-detail-label">Open lesson details</span>
-          <span class="lesson-detail-meta">Artifacts, script, events</span>
-        </span>
-        <span class="lesson-detail-arrow" aria-hidden="true">
-          <svg viewBox="0 0 24 24">
-            <path d="M9 6l6 6-6 6" />
-          </svg>
-        </span>
-      </a>
+    <div class="progress-track">
+      <div class="progress-fill" style="width: {{ summary.percent }}%" data-course-progress></div>
     </div>
-  </article>
-  {% else %}
-  <article class="panel empty-state">
-    <h3>No active lessons</h3>
-    <p>Sync the catalog again after adding direct child notes to this course in Trilium.</p>
-  </article>
+  </a>
   {% endfor %}
-  </section>
 </section>
-{% endfor %}
 {% else %}
 <section class="panel empty-state">
   <h3>No courses yet</h3>
@@ -150,17 +79,6 @@
 </section>
 {% endif %}
 
-<aside class="error-banner hidden" data-error-banner>
-  <div class="error-banner-copy">
-    <p class="eyebrow">Lesson Error</p>
-    <h3 data-error-banner-title>Error</h3>
-    <pre data-error-banner-body></pre>
-  </div>
-  <div class="error-banner-actions">
-    <button type="button" class="secondary-button" data-error-copy>Copy error</button>
-    <button type="button" data-error-dismiss>Dismiss</button>
-  </div>
-</aside>
 <aside class="flash-banner {% if flash_level == 'error' or not flash_message %}hidden{% endif %}" data-flash-banner>
   <div class="error-banner-copy">
     <p class="eyebrow">Status</p>
@@ -172,14 +90,7 @@
 </aside>
 
 <script>
-  function renderStageList(steps) {
-    return steps.map((step) => `<li class="stage-step ${step.state}">${step.label} <span class="muted">${step.display_state}</span></li>`).join("");
-  }
-
   document.addEventListener("DOMContentLoaded", () => {
-    const errorBanner = document.querySelector("[data-error-banner]");
-    const errorTitle = document.querySelector("[data-error-banner-title]");
-    const errorBody = document.querySelector("[data-error-banner-body]");
     const runtimePanel = document.querySelector("[data-runtime-panel]");
     const runtimeSummary = document.querySelector("[data-runtime-summary]");
     const runtimeGrid = runtimePanel?.querySelector(".check-grid");
@@ -208,69 +119,48 @@
         .join("");
     }
 
+    function updateChip(card, selector, count, label) {
+      const chip = card.querySelector(selector);
+      if (!chip) return;
+      chip.textContent = `${count} ${label}`;
+      chip.classList.toggle("hidden", count === 0);
+    }
+
+    function updateCourseCards(courses) {
+      for (const course of courses) {
+        const card = document.querySelector(`[data-course-card="${course.id}"]`);
+        if (!card) continue;
+        const lessons = course.lessons || [];
+        const counts = { completed: 0, active: 0, failed: 0, pending: 0 };
+        for (const lesson of lessons) {
+          if (lesson.stage_state === "completed") counts.completed += 1;
+          else if (lesson.stage_state === "running" || lesson.stage_state === "queued") counts.active += 1;
+          else if (lesson.stage_state === "failed") counts.failed += 1;
+          else counts.pending += 1;
+        }
+        const countText = card.querySelector("[data-course-count]");
+        if (countText) countText.textContent = `${lessons.length} lesson${lessons.length === 1 ? "" : "s"}`;
+        const completedChip = card.querySelector("[data-chip-completed]");
+        if (completedChip) completedChip.textContent = `${counts.completed} done`;
+        updateChip(card, "[data-chip-active]", counts.active, "in progress");
+        updateChip(card, "[data-chip-failed]", counts.failed, "failed");
+        updateChip(card, "[data-chip-pending]", counts.pending, "pending");
+        const fill = card.querySelector("[data-course-progress]");
+        if (fill) fill.style.width = `${lessons.length ? Math.round((counts.completed * 100) / lessons.length) : 0}%`;
+      }
+    }
+
     async function refreshDashboardStatus() {
       const response = await fetch("/api/dashboard", { headers: { "Accept": "application/json" } });
       if (!response.ok) return;
       const payload = await response.json();
       renderRuntimeChecks(payload.runtime_checks || []);
-      const lessons = (payload.courses || []).flatMap((course) => course.lessons || []);
-      for (const lesson of lessons) {
-        const root = document.querySelector(`[data-lesson-id="${lesson.id}"]`);
-        if (!root) continue;
-        const pill = root.closest(".lesson-card")?.querySelector("[data-stage-pill]");
-        if (pill) {
-          pill.textContent = lesson.stage_state_display;
-          pill.className = `stage ${lesson.stage_state}`;
-        }
-        root.querySelector("[data-stage-text]").textContent = `Stage: ${lesson.stage_label}`;
-        root.querySelector("[data-eta-text]").textContent = `${lesson.eta_label}: ${lesson.eta_text}`;
-        root.querySelector("[data-queue-text]").textContent = lesson.queue_position ? `Queue position: ${lesson.queue_position}` : "Queue position: active or not queued";
-        root.querySelector("[data-progress-fill]").style.width = `${lesson.progress_percent}%`;
-        root.querySelector("[data-stage-list]").innerHTML = renderStageList(lesson.steps);
-        const errorActions = root.querySelector("[data-error-actions]");
-        const errorTrigger = root.querySelector("[data-error-trigger]");
-        if (lesson.stage_error) {
-          if (errorActions) errorActions.classList.remove("hidden");
-          if (errorTrigger) {
-            errorTrigger.dataset.errorTitle = lesson.title;
-            errorTrigger.dataset.errorMessage = lesson.stage_error;
-          }
-        } else {
-          if (errorActions) errorActions.classList.add("hidden");
-          if (errorTrigger) errorTrigger.dataset.errorMessage = "";
-        }
-        const youtubeRow = root.closest(".lesson-card")?.querySelector("[data-youtube-row]");
-        const youtubeLink = youtubeRow?.querySelector("[data-youtube-link]");
-        if (lesson.youtube_url && youtubeRow && youtubeLink) {
-          youtubeLink.href = lesson.youtube_url;
-          youtubeRow.classList.remove("hidden");
-          root.closest(".lesson-card")?.querySelector("[data-audio-queue-form]")?.classList.remove("hidden");
-        } else {
-          youtubeRow?.classList.add("hidden");
-          root.closest(".lesson-card")?.querySelector("[data-audio-queue-form]")?.classList.add("hidden");
-        }
-      }
+      updateCourseCards(payload.courses || []);
     }
 
-    document.addEventListener("click", async (event) => {
-      const trigger = event.target.closest("[data-error-trigger]");
-      if (trigger && errorBanner && errorTitle && errorBody) {
-        errorTitle.textContent = trigger.dataset.errorTitle || "Lesson error";
-        errorBody.textContent = trigger.dataset.errorMessage || "";
-        errorBanner.classList.remove("hidden");
-        return;
-      }
-      if (event.target.closest("[data-error-dismiss]") && errorBanner) {
-        errorBanner.classList.add("hidden");
-        return;
-      }
+    document.addEventListener("click", (event) => {
       if (event.target.closest("[data-flash-dismiss]")) {
         document.querySelector("[data-flash-banner]")?.classList.add("hidden");
-        return;
-      }
-      if (event.target.closest("[data-error-copy]") && errorBody) {
-        const value = errorBody.textContent || "";
-        if (value) await navigator.clipboard.writeText(value);
       }
     });
 

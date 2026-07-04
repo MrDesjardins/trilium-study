@@ -1,0 +1,223 @@
+{% extends "base.html" %}
+{% block title %}{{ course.title }}{% endblock %}
+{% block content %}
+<nav class="breadcrumbs" aria-label="Breadcrumb">
+  <a href="/">Dashboard</a>
+  <span class="breadcrumb-sep" aria-hidden="true">/</span>
+  <span aria-current="page">{{ course.title }}</span>
+</nav>
+
+{% if flash_level == "error" and flash_message %}
+<section class="panel error-panel">
+  <h3>Action Failed</h3>
+  <p>{{ flash_message }}</p>
+</section>
+{% endif %}
+
+<section class="panel hero">
+  <div>
+    <p class="eyebrow">{{ course.class_title or "Course" }}</p>
+    <h2>{{ course.title }}</h2>
+    <p class="muted">Course note ID: {{ course.trilium_note_id }}. Direct child notes are treated as lessons.</p>
+    <p class="muted">{{ summary.total }} lesson{{ "s" if summary.total != 1 else "" }} · {{ summary.completed }} done{% if summary.active %} · {{ summary.active }} in progress{% endif %}{% if summary.failed %} · {{ summary.failed }} failed{% endif %}</p>
+  </div>
+  <form id="bulk-generate-form" method="post" action="/courses/generate" class="bulk-controls">
+    <label class="checkbox"><input type="checkbox" data-select-all /> Select all</label>
+    <button type="submit">Generate From Last Done Selected</button>
+    <button type="submit" name="force_regenerate" value="true">Force Generate All Selected</button>
+  </form>
+</section>
+
+<section class="lesson-grid">
+  {% for lesson in lessons %}
+  {% set status = lesson_statuses.get(lesson.id) %}
+  <article class="panel lesson-card">
+    <label class="lesson-selector checkbox"><input type="checkbox" name="lesson_ids" value="{{ lesson.id }}" form="bulk-generate-form" /> Select</label>
+    <div class="lesson-top">
+      <h3>{{ lesson.title }}</h3>
+      <div class="lesson-top-side">
+        <span class="stage {{ status.stage_state if status else lesson.stage_state }}" data-stage-pill>{{ status.stage_state_display if status else lesson.stage_state }}</span>
+        <p class="lesson-link-row {% if not status or not status.youtube_url %}hidden{% endif %}" data-youtube-row>
+          <a
+            class="youtube-link"
+            data-youtube-link
+            href="{{ status.youtube_url if status and status.youtube_url else '#' }}"
+            target="_blank"
+            rel="noreferrer"
+            aria-label="Open uploaded YouTube video for {{ lesson.title }}"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M23.5 6.2a3 3 0 0 0-2.1-2.1C19.5 3.5 12 3.5 12 3.5s-7.5 0-9.4.6A3 3 0 0 0 .5 6.2 31.4 31.4 0 0 0 0 12a31.4 31.4 0 0 0 .5 5.8 3 3 0 0 0 2.1 2.1c1.9.6 9.4.6 9.4.6s7.5 0 9.4-.6a3 3 0 0 0 2.1-2.1A31.4 31.4 0 0 0 24 12a31.4 31.4 0 0 0-.5-5.8ZM9.6 15.7V8.3l6.3 3.7-6.3 3.7Z" />
+            </svg>
+            <span>YouTube</span>
+          </a>
+        </p>
+      </div>
+    </div>
+    <div class="lesson-status-block" data-lesson-id="{{ lesson.id }}">
+      <p class="muted" data-stage-text>Stage: {{ status.stage_label if status else (lesson.stage or "pending") }}</p>
+      <p class="muted" data-eta-text>{{ status.eta_label if status else "ETA" }}: {{ status.eta_text if status else "waiting" }}</p>
+      <p class="muted" data-queue-text>{% if status and status.queue_position %}Queue position: {{ status.queue_position }}{% else %}Queue position: active or not queued{% endif %}</p>
+      <div class="progress-track">
+        <div class="progress-fill" style="width: {{ status.progress_percent if status else 0 }}%" data-progress-fill></div>
+      </div>
+      <ol class="stage-list" data-stage-list>
+        {% if status %}
+        {% for step in status.steps %}
+        <li class="stage-step {{ step.state }}">{{ step.label }} <span class="muted">{{ step.state }}</span></li>
+        {% endfor %}
+        {% endif %}
+      </ol>
+      <div class="lesson-error-actions {% if not status or not status.stage_error %}hidden{% endif %}" data-error-actions>
+        <button
+          type="button"
+          class="secondary-button"
+          data-error-trigger
+          data-error-title="{{ lesson.title }}"
+          data-error-message="{{ status.stage_error if status else '' }}"
+        >
+          View error
+        </button>
+      </div>
+    </div>
+    <div class="lesson-actions">
+      <form method="post" action="/lessons/{{ lesson.id }}/run">
+        <button type="submit">Generate From Last Done</button>
+      </form>
+      <form method="post" action="/lessons/{{ lesson.id }}/run">
+        <input type="hidden" name="force_regenerate" value="true" />
+        <button type="submit">Force Generate All</button>
+      </form>
+      <form method="post" action="/lessons/{{ lesson.id }}/queue-audio" class="lesson-audio-queue-form {% if not status or not status.youtube_url %}hidden{% endif %}" data-audio-queue-form>
+        <button type="submit" class="secondary-button">Queue audio stream</button>
+      </form>
+      <a class="lesson-detail-link" href="/lessons/{{ lesson.id }}" aria-label="Open lesson details for {{ lesson.title }}">
+        <span class="lesson-detail-copy">
+          <span class="lesson-detail-label">Open lesson details</span>
+          <span class="lesson-detail-meta">Artifacts, script, events</span>
+        </span>
+        <span class="lesson-detail-arrow" aria-hidden="true">
+          <svg viewBox="0 0 24 24">
+            <path d="M9 6l6 6-6 6" />
+          </svg>
+        </span>
+      </a>
+    </div>
+  </article>
+  {% else %}
+  <article class="panel empty-state">
+    <h3>No active lessons</h3>
+    <p>Sync the catalog again after adding direct child notes to this course in Trilium.</p>
+  </article>
+  {% endfor %}
+</section>
+
+<aside class="error-banner hidden" data-error-banner>
+  <div class="error-banner-copy">
+    <p class="eyebrow">Lesson Error</p>
+    <h3 data-error-banner-title>Error</h3>
+    <pre data-error-banner-body></pre>
+  </div>
+  <div class="error-banner-actions">
+    <button type="button" class="secondary-button" data-error-copy>Copy error</button>
+    <button type="button" data-error-dismiss>Dismiss</button>
+  </div>
+</aside>
+<aside class="flash-banner {% if flash_level == 'error' or not flash_message %}hidden{% endif %}" data-flash-banner>
+  <div class="error-banner-copy">
+    <p class="eyebrow">Status</p>
+    <h3>{{ flash_message or "Update" }}</h3>
+  </div>
+  <div class="error-banner-actions">
+    <button type="button" class="secondary-button" data-flash-dismiss>Dismiss</button>
+  </div>
+</aside>
+
+<script>
+  function renderStageList(steps) {
+    return steps.map((step) => `<li class="stage-step ${step.state}">${step.label} <span class="muted">${step.display_state}</span></li>`).join("");
+  }
+
+  document.addEventListener("DOMContentLoaded", () => {
+    const errorBanner = document.querySelector("[data-error-banner]");
+    const errorTitle = document.querySelector("[data-error-banner-title]");
+    const errorBody = document.querySelector("[data-error-banner-body]");
+
+    const selectAll = document.querySelector("[data-select-all]");
+    if (selectAll) {
+      selectAll.addEventListener("change", () => {
+        document.querySelectorAll('input[name="lesson_ids"]').forEach((box) => {
+          box.checked = selectAll.checked;
+        });
+      });
+    }
+
+    async function refreshCourseStatus() {
+      const response = await fetch("/api/courses/{{ course.id }}", { headers: { "Accept": "application/json" } });
+      if (!response.ok) return;
+      const payload = await response.json();
+      for (const lesson of payload.lessons || []) {
+        const root = document.querySelector(`[data-lesson-id="${lesson.id}"]`);
+        if (!root) continue;
+        const pill = root.closest(".lesson-card")?.querySelector("[data-stage-pill]");
+        if (pill) {
+          pill.textContent = lesson.stage_state_display;
+          pill.className = `stage ${lesson.stage_state}`;
+        }
+        root.querySelector("[data-stage-text]").textContent = `Stage: ${lesson.stage_label}`;
+        root.querySelector("[data-eta-text]").textContent = `${lesson.eta_label}: ${lesson.eta_text}`;
+        root.querySelector("[data-queue-text]").textContent = lesson.queue_position ? `Queue position: ${lesson.queue_position}` : "Queue position: active or not queued";
+        root.querySelector("[data-progress-fill]").style.width = `${lesson.progress_percent}%`;
+        root.querySelector("[data-stage-list]").innerHTML = renderStageList(lesson.steps);
+        const errorActions = root.querySelector("[data-error-actions]");
+        const errorTrigger = root.querySelector("[data-error-trigger]");
+        if (lesson.stage_error) {
+          if (errorActions) errorActions.classList.remove("hidden");
+          if (errorTrigger) {
+            errorTrigger.dataset.errorTitle = lesson.title;
+            errorTrigger.dataset.errorMessage = lesson.stage_error;
+          }
+        } else {
+          if (errorActions) errorActions.classList.add("hidden");
+          if (errorTrigger) errorTrigger.dataset.errorMessage = "";
+        }
+        const youtubeRow = root.closest(".lesson-card")?.querySelector("[data-youtube-row]");
+        const youtubeLink = youtubeRow?.querySelector("[data-youtube-link]");
+        if (lesson.youtube_url && youtubeRow && youtubeLink) {
+          youtubeLink.href = lesson.youtube_url;
+          youtubeRow.classList.remove("hidden");
+          root.closest(".lesson-card")?.querySelector("[data-audio-queue-form]")?.classList.remove("hidden");
+        } else {
+          youtubeRow?.classList.add("hidden");
+          root.closest(".lesson-card")?.querySelector("[data-audio-queue-form]")?.classList.add("hidden");
+        }
+      }
+    }
+
+    document.addEventListener("click", async (event) => {
+      const trigger = event.target.closest("[data-error-trigger]");
+      if (trigger && errorBanner && errorTitle && errorBody) {
+        errorTitle.textContent = trigger.dataset.errorTitle || "Lesson error";
+        errorBody.textContent = trigger.dataset.errorMessage || "";
+        errorBanner.classList.remove("hidden");
+        return;
+      }
+      if (event.target.closest("[data-error-dismiss]") && errorBanner) {
+        errorBanner.classList.add("hidden");
+        return;
+      }
+      if (event.target.closest("[data-flash-dismiss]")) {
+        document.querySelector("[data-flash-banner]")?.classList.add("hidden");
+        return;
+      }
+      if (event.target.closest("[data-error-copy]") && errorBody) {
+        const value = errorBody.textContent || "";
+        if (value) await navigator.clipboard.writeText(value);
+      }
+    });
+
+    refreshCourseStatus();
+    setInterval(refreshCourseStatus, 4000);
+  });
+</script>
+{% endblock %}

@@ -104,6 +104,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         courses = session.scalars(active_courses_query()).all()
         return [{"course": course, "lessons": session.scalars(active_lessons_query(course.id)).all()} for course in courses]
 
+    def course_summary(lessons: list[Lesson], lesson_statuses: dict[int, dict]) -> dict:
+        counts = {"completed": 0, "active": 0, "failed": 0, "pending": 0}
+        for lesson in lessons:
+            state = lesson_statuses[lesson.id]["stage_state"]
+            if state == "completed":
+                counts["completed"] += 1
+            elif state in {"running", "queued"}:
+                counts["active"] += 1
+            elif state == "failed":
+                counts["failed"] += 1
+            else:
+                counts["pending"] += 1
+        total = len(lessons)
+        counts["total"] = total
+        counts["percent"] = round(counts["completed"] * 100 / total) if total else 0
+        return counts
+
     def pop_flash(request: Request) -> tuple[str | None, str | None]:
         flash_level = request.cookies.get("flash_level")
         flash_message = request.cookies.get("flash_message")
@@ -251,6 +268,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         jobs = db.scalars(select(JobEvent).order_by(JobEvent.created_at.desc()).limit(25)).all()
         queue_map = queue_positions(db)
         lesson_statuses = {lesson.id: lesson_status_payload(db, lesson, queue_map) for lesson in lessons}
+        for group in course_groups:
+            group["summary"] = course_summary(group["lessons"], lesson_statuses)
         flash_level, flash_message = pop_flash(request)
         checks = runtime_checks(settings)
         failing_runtime_checks = [check for check in checks if not check.ok]
@@ -295,29 +314,64 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             f"Discovered {course_count} course(s) and {lesson_count} lesson(s) under catalog note {parent_note_id}.{archive_note}",
         )
 
+    @app.get("/courses/{course_id}", response_class=HTMLResponse)
+    async def course_detail(request: Request, course_id: int, db: Session = Depends(get_db)):
+        course = db.get(Course, course_id)
+        if course is None or course.archived_at is not None:
+            raise HTTPException(status_code=404, detail="Course not found")
+        lessons = db.scalars(active_lessons_query(course.id)).all()
+        queue_map = queue_positions(db)
+        lesson_statuses = {lesson.id: lesson_status_payload(db, lesson, queue_map) for lesson in lessons}
+        flash_level, flash_message = pop_flash(request)
+        response = templates.TemplateResponse(
+            request,
+            "course_detail.html",
+            {
+                "request": request,
+                "course": course,
+                "lessons": lessons,
+                "lesson_statuses": lesson_statuses,
+                "summary": course_summary(lessons, lesson_statuses),
+                "flash_level": flash_level,
+                "flash_message": flash_message,
+            },
+        )
+        if flash_message:
+            response.delete_cookie("flash_level")
+            response.delete_cookie("flash_message")
+        return response
+
     @app.post("/courses/generate")
     async def generate_selected_lessons(
+        request: Request,
         lesson_ids: list[int] = Form(default=[]),
         force_regenerate: bool = Form(default=False),
         db: Session = Depends(get_db),
     ):
+        redirect_url = request.headers.get("referer") or "/"
         selected = [db.get(Lesson, lesson_id) for lesson_id in lesson_ids]
         selected_lessons = [lesson for lesson in selected if lesson is not None and lesson.archived_at is None]
         if not selected_lessons:
-            return redirect_with_flash("/", "No active lessons selected for generation.")
+            return redirect_with_flash(redirect_url, "No active lessons selected for generation.")
         for lesson in selected_lessons:
             runner.create_lesson_job(lesson.course_id, lesson.id, force_regenerate=force_regenerate)
-        return redirect_with_flash("/", f"Queued {len(selected_lessons)} lesson generation job(s).")
+        return redirect_with_flash(redirect_url, f"Queued {len(selected_lessons)} lesson generation job(s).")
 
     @app.post("/lessons/{lesson_id}/run")
-    async def run_lesson(lesson_id: int, force_regenerate: bool = Form(default=False), db: Session = Depends(get_db)):
+    async def run_lesson(
+        request: Request,
+        lesson_id: int,
+        force_regenerate: bool = Form(default=False),
+        db: Session = Depends(get_db),
+    ):
         lesson = db.get(Lesson, lesson_id)
         if lesson is None:
             raise HTTPException(status_code=404, detail="Lesson not found")
+        redirect_url = request.headers.get("referer") or f"/courses/{lesson.course_id}"
         if lesson.archived_at is not None:
-            return redirect_with_flash("/", f"Archived lesson '{lesson.title}' cannot be generated.", level="error")
+            return redirect_with_flash(redirect_url, f"Archived lesson '{lesson.title}' cannot be generated.", level="error")
         runner.create_lesson_job(lesson.course_id, lesson.id, force_regenerate=force_regenerate)
-        return redirect_with_flash("/", f"Queued lesson '{lesson.title}' for generation.")
+        return redirect_with_flash(redirect_url, f"Queued lesson '{lesson.title}' for generation.")
 
     @app.get("/lessons/{lesson_id}", response_class=HTMLResponse)
     async def lesson_detail(request: Request, lesson_id: int, db: Session = Depends(get_db)):
@@ -357,6 +411,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "catalog_root_id": settings.trilium_parent_note_id,
             "courses": course_payloads,
             "runtime_checks": [check.__dict__ for check in runtime_checks(settings)],
+        }
+
+    @app.get("/api/courses/{course_id}")
+    async def course_api(course_id: int, db: Session = Depends(get_db)):
+        course = db.get(Course, course_id)
+        if course is None or course.archived_at is not None:
+            raise HTTPException(status_code=404, detail="Course not found")
+        queue_map = queue_positions(db)
+        return {
+            "id": course.id,
+            "title": course.title,
+            "trilium_note_id": course.trilium_note_id,
+            "lessons": [lesson_status_payload(db, lesson, queue_map) for lesson in db.scalars(active_lessons_query(course.id))],
         }
 
     @app.get("/study", response_class=HTMLResponse)

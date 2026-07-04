@@ -1,6 +1,13 @@
 {% extends "base.html" %}
 {% block title %}{{ lesson.title }}{% endblock %}
 {% block content %}
+<nav class="breadcrumbs" aria-label="Breadcrumb">
+  <a href="/">Dashboard</a>
+  <span class="breadcrumb-sep" aria-hidden="true">/</span>
+  <a href="/courses/{{ lesson.course_id }}">{{ lesson.course.title }}</a>
+  <span class="breadcrumb-sep" aria-hidden="true">/</span>
+  <span aria-current="page">{{ lesson.title }}</span>
+</nav>
 <section class="panel hero">
   <div>
     <p class="eyebrow">Lesson</p>

@@ -111,6 +111,88 @@ nav a {
   gap: 18px;
 }
 
+.breadcrumbs {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 0 4px 16px;
+  font-weight: 700;
+}
+.breadcrumbs a {
+  color: #ffe3b8;
+  text-decoration: none;
+  background: rgba(52, 26, 18, 0.42);
+  padding: 8px 14px;
+  border-radius: 999px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 6px 12px rgba(32, 8, 14, 0.28);
+  transition: background 0.18s ease, transform 0.18s ease;
+}
+.breadcrumbs a:hover,
+.breadcrumbs a:focus-visible {
+  background: rgba(52, 26, 18, 0.62);
+  transform: translateY(-1px);
+}
+.breadcrumbs [aria-current="page"] {
+  color: #ffd88f;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.breadcrumb-sep {
+  color: rgba(255, 227, 184, 0.55);
+}
+
+.course-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 18px;
+  margin-bottom: 22px;
+}
+.course-card {
+  display: grid;
+  gap: 14px;
+  align-content: start;
+  margin-bottom: 0;
+  text-decoration: none;
+  color: var(--ink);
+  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+}
+.course-card:hover,
+.course-card:focus-visible {
+  transform: translateY(-2px);
+  border-color: rgba(255, 106, 43, 0.42);
+  box-shadow:
+    20px 20px 36px rgba(32, 8, 14, 0.48),
+    -10px -10px 24px rgba(255, 171, 98, 0.12),
+    inset 2px 2px 0 rgba(255, 232, 193, 0.72),
+    inset -3px -4px 10px rgba(120, 47, 25, 0.24),
+    0 0 0 2px rgba(255, 179, 71, 0.18);
+}
+.course-card h3 {
+  margin: 0;
+}
+.course-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+}
+.course-card-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.course-card-copy .muted {
+  margin: 0;
+}
+.course-chip-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .bulk-actions {
   display: flex;
   justify-content: space-between;
