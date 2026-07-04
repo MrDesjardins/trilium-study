@@ -49,7 +49,7 @@
 <section class="panel course-section" data-course-id="{{ course.id }}">
   <div class="bulk-actions">
     <div>
-      <p class="eyebrow">Course</p>
+      <p class="eyebrow">{{ course.class_title or "Course" }}</p>
       <h3>{{ course.title }}</h3>
       <p class="muted">Course note ID: {{ course.trilium_note_id }}. Direct child notes are treated as lessons.</p>
     </div>

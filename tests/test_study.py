@@ -299,7 +299,9 @@ def test_catalog_sync_creates_courses_and_archives_missing_state(monkeypatch, tm
     class FakeTriliumClient:
         def __init__(self, *_args):
             self.notes = {
-                "catalog": {"noteId": "catalog", "title": "Catalog", "childNoteIds": ["course-a", "course-b"]},
+                "catalog": {"noteId": "catalog", "title": "University", "childNoteIds": ["class-1", "links"]},
+                "class-1": {"noteId": "class-1", "title": "Class 1", "childNoteIds": ["course-a", "course-b"]},
+                "links": {"noteId": "links", "title": "Links", "childNoteIds": []},
                 "course-a": {"noteId": "course-a", "title": "Course A", "childNoteIds": ["lesson-a1", "lesson-a2"]},
                 "course-b": {"noteId": "course-b", "title": "Course B", "childNoteIds": ["lesson-b1"]},
                 "lesson-a1": {"noteId": "lesson-a1", "title": "Lesson A1", "childNoteIds": []},
@@ -314,7 +316,7 @@ def test_catalog_sync_creates_courses_and_archives_missing_state(monkeypatch, tm
             note = self.notes[parent_note_id]
             return [self.notes[child_id] for child_id in note["childNoteIds"]]
 
-    monkeypatch.setattr("app.main.TriliumClient", FakeTriliumClient)
+    monkeypatch.setattr("app.catalog.TriliumClient", FakeTriliumClient)
 
     app = create_app(settings)
     with TestClient(app) as client:
@@ -325,6 +327,8 @@ def test_catalog_sync_creates_courses_and_archives_missing_state(monkeypatch, tm
     with session_factory() as session:
         active_courses = session.scalars(select(Course).where(Course.archived_at.is_(None)).order_by(Course.trilium_note_id)).all()
         assert [course.trilium_note_id for course in active_courses] == ["course-a", "course-b"]
+        assert [course.class_title for course in active_courses] == ["Class 1", "Class 1"]
+        assert [course.parent_note_id for course in active_courses] == ["class-1", "class-1"]
         assert {lesson.trilium_note_id for lesson in session.scalars(select(Lesson).where(Lesson.archived_at.is_(None))).all()} == {
             "lesson-a1",
             "lesson-a2",

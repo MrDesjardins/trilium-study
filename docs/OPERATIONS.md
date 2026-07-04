@@ -10,7 +10,14 @@ uv run python -m app.bootstrap
 
 `app.bootstrap` now runs Alembic migrations to bring the SQLite schema to the current revision.
 
-`TRILIUM_PARENT_NOTE_ID` should point to a Trilium catalog/root note. The app treats each direct child of that catalog root as a course, then treats each direct child of a course note as a lesson.
+`TRILIUM_PARENT_NOTE_ID` should point to the Trilium university/root note (currently `nQldv3PN0vny`, "Newlane"). The hierarchy is:
+
+- university note (`TRILIUM_PARENT_NOTE_ID`)
+  - class notes (e.g. "History of Ancient Western Philosophy") — direct children of the university note
+    - course notes (e.g. "The Sophists") — direct children of a class
+      - lesson notes — direct children of a course
+
+Utility notes under the university (links, audio) have no children and therefore contribute no courses. New classes added under the university note are discovered automatically on the next catalog sync — no configuration change needed.
 
 Before the first sync after moving from a single-course setup to a catalog-root setup, back up runtime state:
 
@@ -183,6 +190,28 @@ After that, `./deploy.sh` should run without prompting for SSH credentials.
 
 For fully unattended deploys, the mini-pc user also needs non-interactive `sudo` for the existing `trilium-study.service` restart and status commands. If that is not configured yet, `scripts/update-prod.sh` will fail fast with an actionable message instead of hanging on a password prompt.
 
+## Passwordless systemctl (NOPASSWD Sudoers Rule)
+
+`deploy.sh`, `scripts/update-prod.sh`, and `scripts/generate-local-prod.sh` all run `sudo -n systemctl ...` on the mini-pc. Without a NOPASSWD rule, `generate-local-prod.sh` falls back to killing the app process by port and relying on systemd auto-restart, which works but is less clean.
+
+One-time setup (prompts for the sudo password once):
+
+```bash
+ssh -t pdesjardins@10.0.0.181 "echo 'pdesjardins ALL=(root) NOPASSWD: /usr/bin/systemctl stop trilium-study.service, /usr/bin/systemctl start trilium-study.service, /usr/bin/systemctl restart trilium-study.service, /usr/bin/systemctl status trilium-study.service, /usr/bin/systemctl --no-pager --full status trilium-study.service' | sudo tee /etc/sudoers.d/trilium-study >/dev/null && sudo chmod 440 /etc/sudoers.d/trilium-study && sudo visudo -c"
+```
+
+Notes:
+
+- sudoers matches command arguments exactly, so each `systemctl` variant the scripts use is listed explicitly
+- `visudo -c` validates the file; if it reports an error, remove the file with `sudo rm /etc/sudoers.d/trilium-study` before retrying
+- verify afterward from the workstation:
+
+```bash
+ssh pdesjardins@10.0.0.181 "sudo -n systemctl status trilium-study.service" | head -3
+```
+
+If that prints service status without a password prompt, the rule works.
+
 ## One-Time LAN Access Setup
 
 If the mini-pc firewall is enabled, allow the application port once:
@@ -210,15 +239,26 @@ After the one-time SSH, service install, and firewall setup, future updates shou
 
 ## Local GPU Generation With Production Database
 
-When this workstation has a faster GPU than the mini-pc, generate lessons locally and write the results back to production with [scripts/generate-local-prod.sh](/home/miste/code/trilium-study/scripts/generate-local-prod.sh).
+When this workstation has a faster GPU than the mini-pc, generate lessons locally and write the results back to production with [scripts/generate-local-prod.sh](/home/miste/code/trilium-study/scripts/generate-local-prod.sh). The production database remains the source of truth: the script pulls it, works on the copy, and pushes it back.
 
 The script:
 
-1. stops `trilium-study.service` on the mini-pc so SQLite is not locked
-2. copies the production database and any existing lesson workspace artifacts to `.state/prod-sync/`
-3. runs the full lesson pipeline locally (Kokoro TTS uses this machine's GPU)
-4. copies the updated database and generated artifacts back to the mini-pc
-5. restarts the production service
+1. stops `trilium-study.service` on the mini-pc for the entire run, so no production writes can be lost to the final whole-database push (the production UI is down during generation, by design)
+2. copies the production database and YouTube auth files to `.state/prod-sync/`
+3. in `--course` mode, syncs the Trilium catalog into the database copy so lessons newly added in Trilium are discovered, then resolves every non-archived lesson of the course that is not yet fully generated
+4. copies existing lesson workspace artifacts for the selected lessons from the mini-pc
+5. runs the full lesson pipeline locally (Kokoro TTS uses this machine's GPU), continuing past per-lesson failures
+6. copies the updated database and generated artifacts back to the mini-pc — including when some lessons failed, so completed work is never lost
+7. restarts the production service and prints a per-lesson summary
+
+The everyday one-shot command — generate everything pending in a course:
+
+```bash
+./scripts/generate-local-prod.sh --list-courses   # find the course ID
+./scripts/generate-local-prod.sh --course 3
+```
+
+Already-generated lessons and stages are skipped automatically (the pipeline reuses completed artifacts with matching content hashes), so `--course` never overwrites existing production data. Use `--force` only when you intentionally want to regenerate everything it selects.
 
 List lessons from production:
 
@@ -232,7 +272,7 @@ Archived lessons are hidden from normal lesson listings and cannot be generated.
 uv run python -m app.run_lesson --list --include-archived
 ```
 
-Generate one or more lessons:
+Generate specific lessons by ID (skips the Trilium catalog sync):
 
 ```bash
 ./scripts/generate-local-prod.sh 42
@@ -240,12 +280,28 @@ Generate one or more lessons:
 ./scripts/generate-local-prod.sh --force 42
 ```
 
+Exit codes:
+
+- `0` — all selected lessons completed (or nothing was pending)
+- `2` — the run finished but at least one lesson failed; completed work was pushed, failed lessons keep state `failed` and resume from their failed stage on the next run
+- `1` — fatal error; production was not updated
+
+Before each push, the script creates a timestamped `trilium-study.db.<timestamp>.bak` next to the production database — that backup is the rollback path.
+
+Notes:
+
+- if the catalog sync archives previously active courses (usually a sign that `TRILIUM_PARENT_NOTE_ID` points at the wrong note), the run aborts before generating or pushing anything; rerun with `ALLOW_ARCHIVAL=1` only when the archival is intentional
+- the catalog sync matches the web UI behavior: it uses `TRILIUM_PARENT_NOTE_ID` from the local `.env`, which should always point at the university note (see Local Setup)
+- if the production service was already stopped before the run, the script still starts it at the end
+- if the YouTube auth files are missing on the mini-pc, the script warns up front; upload stages then fail per lesson while earlier stages still complete and are pushed
+- if the run is interrupted (Ctrl-C, SSH drop), the exit trap restarts the production service and nothing is pushed
+
 Requirements on this workstation:
 
 - passwordless SSH to the mini-pc (same as `./deploy.sh`)
 - passwordless `sudo systemctl stop/start trilium-study.service` on the mini-pc
 - local `.env` with valid Trilium, OpenAI, and Kokoro settings
-- `uv sync --extra tts --extra youtube` dependencies installed
+- `uv sync --extra tts --extra youtube` dependencies installed (the script runs this itself before stopping production)
 
 The script uses your local `.env` for Trilium and OpenAI, but copies the production SQLite database and YouTube auth files from the mini-pc for the duration of the run. Results appear in the production UI at `http://10.0.0.181:8083/` when the sync completes.
 
@@ -256,6 +312,8 @@ DATABASE_URL=sqlite:///$(pwd)/.state/prod-sync/trilium-study.db \
 WORKSPACE_DIR=$(pwd)/.state/prod-sync/workspace \
 uv run python -m app.run_lesson 42
 ```
+
+The same environment works with the other CLI modes: `--list-courses`, `--course 3 --print-ids`, and `--sync-catalog`.
 
 Recommended post-deploy checks:
 

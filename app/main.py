@@ -15,6 +15,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.bootstrap import bootstrap_database
+from app.catalog import sync_catalog
 from app.config import Settings, get_settings
 from app.content import LessonCollector, TriliumClient, TriliumClientError
 from app.db import make_session_factory
@@ -86,7 +87,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             session.close()
 
     def active_courses_query():
-        return select(Course).where(Course.archived_at.is_(None)).order_by(Course.title.asc(), Course.created_at.asc())
+        return (
+            select(Course)
+            .where(Course.archived_at.is_(None))
+            .order_by(Course.class_title.asc(), Course.title.asc(), Course.created_at.asc())
+        )
 
     def active_lessons_query(course_id: int):
         return (
@@ -98,82 +103,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def grouped_courses(session: Session) -> list[dict]:
         courses = session.scalars(active_courses_query()).all()
         return [{"course": course, "lessons": session.scalars(active_lessons_query(course.id)).all()} for course in courses]
-
-    async def sync_catalog(parent_note_id: str, session: Session) -> tuple[int, int, int, int]:
-        client = TriliumClient(settings.trilium_url, settings.trilium_etapi_token)
-        catalog_note = await client.get_note(parent_note_id)
-        course_notes = await client.get_course_lessons(parent_note_id)
-        now = datetime.now(timezone.utc)
-        active_course_note_ids: set[str] = set()
-        active_lesson_count = 0
-        archived_course_count = 0
-        archived_lesson_count = 0
-
-        for course_note in course_notes:
-            course_note_id = course_note["noteId"]
-            active_course_note_ids.add(course_note_id)
-            course = session.scalar(select(Course).where(Course.trilium_note_id == course_note_id))
-            if course is None:
-                course = Course(
-                    trilium_note_id=course_note_id,
-                    title=course_note.get("title", course_note_id),
-                    parent_note_id=parent_note_id,
-                    traversal_hash=course_note_id,
-                    last_synced_at=now,
-                )
-                session.add(course)
-                session.flush()
-            else:
-                course.title = course_note.get("title", course.title)
-                course.parent_note_id = parent_note_id
-                course.traversal_hash = course_note_id
-                course.last_synced_at = now
-                course.archived_at = None
-
-            lesson_notes = await client.get_course_lessons(course_note_id)
-            active_lesson_note_ids: set[str] = set()
-            for lesson_note in lesson_notes:
-                lesson_note_id = lesson_note["noteId"]
-                active_lesson_note_ids.add(lesson_note_id)
-                active_lesson_count += 1
-                lesson = session.scalar(
-                    select(Lesson).where(Lesson.course_id == course.id, Lesson.trilium_note_id == lesson_note_id)
-                )
-                if lesson is None:
-                    session.add(
-                        Lesson(
-                            course_id=course.id,
-                            trilium_note_id=lesson_note_id,
-                            title=lesson_note.get("title", lesson_note_id),
-                            parent_note_id=course.trilium_note_id,
-                            content_hash="",
-                            stage="pending",
-                            stage_state="pending",
-                        )
-                    )
-                else:
-                    lesson.title = lesson_note.get("title", lesson.title)
-                    lesson.parent_note_id = course.trilium_note_id
-                    lesson.archived_at = None
-
-            for lesson in session.scalars(select(Lesson).where(Lesson.course_id == course.id)).all():
-                if lesson.trilium_note_id not in active_lesson_note_ids and lesson.archived_at is None:
-                    lesson.archived_at = now
-                    archived_lesson_count += 1
-
-        for course in session.scalars(select(Course)).all():
-            if course.trilium_note_id not in active_course_note_ids and course.archived_at is None:
-                course.archived_at = now
-                archived_course_count += 1
-                for lesson in course.lessons:
-                    if lesson.archived_at is None:
-                        lesson.archived_at = now
-                        archived_lesson_count += 1
-
-        if not course_notes:
-            # Validate the catalog note ID even when it has no children.
-            catalog_note.get("title")
-        return len(course_notes), active_lesson_count, archived_course_count, archived_lesson_count
 
     def pop_flash(request: Request) -> tuple[str | None, str | None]:
         flash_level = request.cookies.get("flash_level")
@@ -350,7 +279,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def sync_course(parent_note_id: str = Form(default=""), db: Session = Depends(get_db)):
         parent_note_id = (parent_note_id or settings.trilium_parent_note_id).strip()
         try:
-            course_count, lesson_count, archived_course_count, archived_lesson_count = await sync_catalog(parent_note_id, db)
+            course_count, lesson_count, archived_course_count, archived_lesson_count = await sync_catalog(
+                settings, db, parent_note_id
+            )
         except TriliumClientError as exc:
             return redirect_with_flash("/", str(exc), level="error")
         db.commit()
