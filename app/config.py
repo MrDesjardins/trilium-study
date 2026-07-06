@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     log_dir: str = Field(default=".state/logs", alias="LOG_DIR")
     json_log_file: str = Field(default="app.jsonl", alias="JSON_LOG_FILE")
     text_log_file: str = Field(default="app.log", alias="TEXT_LOG_FILE")
+    daily_review_goal: int = Field(default=50, alias="DAILY_REVIEW_GOAL")
     video_width: int = Field(default=1280, alias="VIDEO_WIDTH")
     video_height: int = Field(default=720, alias="VIDEO_HEIGHT")
     video_background: str = Field(default="#f2e7cc", alias="VIDEO_BACKGROUND")

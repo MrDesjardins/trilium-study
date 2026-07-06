@@ -543,6 +543,20 @@ def schedule_flashcard_review(flashcard: Flashcard, result: str, reviewed_at: da
         reps = 0
         interval = 1
         ease = max(1.3, ease - 0.2)
+    elif result == "hard":
+        # Card advanced but with friction: barely grow the interval, lower ease.
+        reps += 1
+        interval = max(1, round(max(interval, 1) * 1.2))
+        ease = max(1.3, ease - 0.15)
+    elif result == "easy":
+        reps += 1
+        if reps == 1:
+            interval = 2
+        elif reps == 2:
+            interval = 5
+        else:
+            interval = max(1, round(interval * ease * 1.3))
+        ease = min(3.0, ease + 0.15)
     else:
         reps += 1
         if reps == 1:

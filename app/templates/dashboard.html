@@ -43,42 +43,53 @@
 </section>
 
 {% if course_groups %}
-<section class="course-grid">
-  {% for group in course_groups %}
-  {% set course = group.course %}
-  {% set summary = group.summary %}
-  <a class="panel course-card" href="/courses/{{ course.id }}" data-course-card="{{ course.id }}" aria-label="Open course {{ course.title }}">
-    <div class="course-card-head">
-      <div class="course-card-copy">
-        <p class="eyebrow">{{ course.class_title or "Course" }}</p>
-        <h3>{{ course.title }}</h3>
-        <p class="muted" data-course-count>{{ summary.total }} lesson{{ "s" if summary.total != 1 else "" }}</p>
-      </div>
-      <span class="lesson-detail-arrow" aria-hidden="true">
-        <svg viewBox="0 0 24 24">
-          <path d="M9 6l6 6-6 6" />
-        </svg>
-      </span>
-    </div>
-    <div class="course-chip-row">
-      {% set legacy = legacy_media.get(course.id) %}
-      {% if legacy and legacy.youtube_url %}
-      <span class="stage completed legacy-chip">▶ Course video</span>
-      {% endif %}
-      {% if legacy and legacy.flashcard_count %}
-      <span class="stage completed legacy-chip">{{ legacy.flashcard_count }} flashcards</span>
-      {% endif %}
-      <span class="stage completed" data-chip-completed>{{ summary.completed }} done</span>
-      <span class="stage running {% if not summary.active %}hidden{% endif %}" data-chip-active>{{ summary.active }} in progress</span>
-      <span class="stage failed {% if not summary.failed %}hidden{% endif %}" data-chip-failed>{{ summary.failed }} failed</span>
-      <span class="stage {% if not summary.pending %}hidden{% endif %}" data-chip-pending>{{ summary.pending }} pending</span>
-    </div>
-    <div class="progress-track">
-      <div class="progress-fill" style="width: {{ summary.percent }}%" data-course-progress></div>
-    </div>
-  </a>
+<div class="class-filter-bar" data-class-filter-bar>
+  <button type="button" class="class-filter-chip active" data-class-filter="">All classes</button>
+  {% for class_group in class_groups %}
+  <button type="button" class="class-filter-chip" data-class-filter="{{ class_group.class_title }}">{{ class_group.class_title }}</button>
   {% endfor %}
+</div>
+{% for class_group in class_groups %}
+<section class="class-group" data-class-group="{{ class_group.class_title }}">
+  <h3 class="class-group-title">{{ class_group.class_title }}</h3>
+  <div class="course-grid">
+    {% for group in class_group.course_groups %}
+    {% set course = group.course %}
+    {% set summary = group.summary %}
+    <a class="panel course-card" href="/courses/{{ course.id }}" data-course-card="{{ course.id }}" aria-label="Open course {{ course.title }}">
+      <div class="course-card-head">
+        <div class="course-card-copy">
+          <p class="eyebrow">{{ course.class_title or "Course" }}</p>
+          <h3>{{ course.title }}</h3>
+          <p class="muted" data-course-count>{{ summary.total }} lesson{{ "s" if summary.total != 1 else "" }}</p>
+        </div>
+        <span class="lesson-detail-arrow" aria-hidden="true">
+          <svg viewBox="0 0 24 24">
+            <path d="M9 6l6 6-6 6" />
+          </svg>
+        </span>
+      </div>
+      <div class="course-chip-row">
+        {% set legacy = legacy_media.get(course.id) %}
+        {% if legacy and legacy.youtube_url %}
+        <span class="stage completed legacy-chip">▶ Course video</span>
+        {% endif %}
+        {% if legacy and legacy.flashcard_count %}
+        <span class="stage completed legacy-chip">{{ legacy.flashcard_count }} flashcards</span>
+        {% endif %}
+        <span class="stage completed" data-chip-completed>{{ summary.completed }} done</span>
+        <span class="stage running {% if not summary.active %}hidden{% endif %}" data-chip-active>{{ summary.active }} in progress</span>
+        <span class="stage failed {% if not summary.failed %}hidden{% endif %}" data-chip-failed>{{ summary.failed }} failed</span>
+        <span class="stage {% if not summary.pending %}hidden{% endif %}" data-chip-pending>{{ summary.pending }} pending</span>
+      </div>
+      <div class="progress-track">
+        <div class="progress-fill" style="width: {{ summary.percent }}%" data-course-progress></div>
+      </div>
+    </a>
+    {% endfor %}
+  </div>
 </section>
+{% endfor %}
 {% else %}
 <section class="panel empty-state">
   <h3>No courses yet</h3>
@@ -169,6 +180,17 @@
       if (event.target.closest("[data-flash-dismiss]")) {
         document.querySelector("[data-flash-banner]")?.classList.add("hidden");
       }
+    });
+
+    const filterBar = document.querySelector("[data-class-filter-bar]");
+    filterBar?.addEventListener("click", (event) => {
+      const chip = event.target.closest("[data-class-filter]");
+      if (!chip) return;
+      const selected = chip.dataset.classFilter;
+      filterBar.querySelectorAll("[data-class-filter]").forEach((el) => el.classList.toggle("active", el === chip));
+      document.querySelectorAll("[data-class-group]").forEach((section) => {
+        section.classList.toggle("hidden", Boolean(selected) && section.dataset.classGroup !== selected);
+      });
     });
 
     refreshDashboardStatus();
