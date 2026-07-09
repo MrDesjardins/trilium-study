@@ -10,10 +10,13 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.db import Base
+from app.models import Course, Flashcard, Lesson
 from app.pipeline import (
     CommandTTSGenerator,
+    DefaultFlashcardGenerator,
     DefaultScriptGenerator,
     FfmpegVideoRenderer,
+    GeneratedFlashcard,
     cleaned_source_material,
     configure_tts_runtime_warnings,
     default_kokoro_command,
@@ -21,9 +24,9 @@ from app.pipeline import (
     media_duration_seconds,
     minimum_script_words,
     narration_markup_issues,
-    schedule_flashcard_review,
     script_meets_length_target,
     script_word_count,
+    sync_flashcards,
     target_duration_minutes,
 )
 from app.status import estimate_remaining_seconds, lesson_stage_estimates_seconds, lesson_status_payload, progress_percent, stage_state_display
@@ -172,33 +175,106 @@ def test_script_gate_uses_cleaned_source_word_count():
     assert minimum_script_words(cleaned_words) < minimum_script_words(raw_words)
 
 
-class DummyFlashcard:
-    def __init__(self):
-        self.ease_factor = 2.5
-        self.repetitions = 0
-        self.interval_days = 0
-        self.due_at = datetime(2026, 5, 23, tzinfo=timezone.utc)
+def test_flashcard_prompt_policy_forbids_vague_and_yes_no_cards():
+    generator = DefaultFlashcardGenerator(DummySettings())
+
+    messages = generator.build_prompt("Atoms", "The nucleus contains protons and neutrons.")
+    system = messages[0]["content"]
+
+    assert "yes/no" in system
+    assert "key idea" in system
+    assert "atomic fact" in system
 
 
-def test_schedule_flashcard_review_again_resets_repetition():
-    flashcard = DummyFlashcard()
+def test_flashcard_target_card_count_scales_with_script_length():
+    generator = DefaultFlashcardGenerator(DummySettings())
 
-    review = schedule_flashcard_review(flashcard, "again", datetime(2026, 5, 23, tzinfo=timezone.utc))
+    short_count = generator.target_card_count("word " * 60)
+    long_count = generator.target_card_count("word " * 3600)
 
-    assert flashcard.repetitions == 0
-    assert flashcard.interval_days == 1
-    assert review.interval_days_after == 1
+    assert short_count == 6
+    assert long_count == 30
 
 
-def test_schedule_flashcard_review_pass_grows_interval():
-    flashcard = DummyFlashcard()
+def _make_session():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    return Session(engine)
 
-    first = schedule_flashcard_review(flashcard, "pass", datetime(2026, 5, 23, tzinfo=timezone.utc))
-    second = schedule_flashcard_review(flashcard, "pass", datetime(2026, 5, 24, tzinfo=timezone.utc))
 
-    assert first.repetitions_after == 1
-    assert second.repetitions_after == 2
-    assert flashcard.interval_days == 3
+def test_sync_flashcards_keeps_matched_cards_and_replaces_others():
+    session = _make_session()
+    course = Course(trilium_note_id="course-1", title="Course", traversal_hash="h")
+    session.add(course)
+    session.flush()
+    lesson = Lesson(course_id=course.id, trilium_note_id="lesson-1", title="Lesson", content_hash="h")
+    session.add(lesson)
+    session.flush()
+
+    kept = Flashcard(lesson_id=lesson.id, prompt="What is X?", answer="old answer", due_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    kept.stability = 5.0
+    kept.repetitions = 3
+    stale = Flashcard(lesson_id=lesson.id, prompt="Unrelated stale card?", answer="stale", due_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    session.add_all([kept, stale])
+    session.commit()
+    kept_id = kept.id
+
+    cards = [
+        GeneratedFlashcard(prompt="What is X?", answer="new answer", source_excerpt="excerpt"),
+        GeneratedFlashcard(prompt="What is Y?", answer="y answer", source_excerpt=None),
+    ]
+    sync_flashcards(session, lesson, cards)
+    session.commit()
+
+    remaining = {card.prompt: card for card in session.query(Flashcard).all()}
+    assert set(remaining) == {"What is X?", "What is Y?"}
+    matched = remaining["What is X?"]
+    assert matched.id == kept_id
+    assert matched.answer == "new answer"
+    assert matched.stability == 5.0
+    assert matched.repetitions == 3
+    new_card = remaining["What is Y?"]
+    assert new_card.stability is None
+
+
+def test_sync_flashcards_unsuspends_changed_cards_and_dedupes_generated_prompts():
+    session = _make_session()
+    course = Course(trilium_note_id="course-2", title="Course", traversal_hash="h")
+    session.add(course)
+    session.flush()
+    lesson = Lesson(course_id=course.id, trilium_note_id="lesson-2", title="Lesson", content_hash="h")
+    session.add(lesson)
+    session.flush()
+
+    changed = Flashcard(
+        lesson_id=lesson.id, prompt="Changed card?", answer="old", suspended=True,
+        due_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    unchanged = Flashcard(
+        lesson_id=lesson.id, prompt="Unchanged card?", answer="same", suspended=True,
+        due_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    session.add_all([changed, unchanged])
+    session.commit()
+
+    cards = [
+        GeneratedFlashcard(prompt="Changed card?", answer="rewritten", source_excerpt=None),
+        GeneratedFlashcard(prompt="Unchanged card?", answer="same", source_excerpt=None),
+        GeneratedFlashcard(prompt="Duplicate prompt?", answer="first variant", source_excerpt=None),
+        GeneratedFlashcard(prompt="Duplicate prompt?", answer="second variant", source_excerpt=None),
+    ]
+    sync_flashcards(session, lesson, cards)
+    session.commit()
+
+    by_prompt = {card.prompt: card for card in session.query(Flashcard).all()}
+    # Regenerated content wakes a suspended card; untouched content stays parked.
+    assert by_prompt["Changed card?"].suspended is False
+    assert by_prompt["Changed card?"].answer == "rewritten"
+    assert by_prompt["Unchanged card?"].suspended is True
+    # Duplicate generated prompts collapse to the first variant, inserted once.
+    duplicates = [card for card in by_prompt.values() if card.prompt == "Duplicate prompt?"]
+    assert len(duplicates) == 1
+    assert duplicates[0].answer == "first variant"
 
 
 def test_default_kokoro_command_targets_repo_module():

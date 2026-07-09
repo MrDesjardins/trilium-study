@@ -139,6 +139,12 @@ class Flashcard(Base):
     ease_factor: Mapped[float] = mapped_column(Float, default=2.5)
     interval_days: Mapped[int] = mapped_column(Integer, default=0)
     repetitions: Mapped[int] = mapped_column(Integer, default=0)
+    # FSRS state; stability is NULL until the first review ("new" card).
+    stability: Mapped[float | None] = mapped_column(Float, nullable=True)
+    difficulty: Mapped[float | None] = mapped_column(Float, nullable=True)
+    fsrs_state: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    fsrs_step: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
     suspended: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -155,10 +161,14 @@ class FlashcardReview(Base):
     flashcard_id: Mapped[int] = mapped_column(ForeignKey("flashcards.id"), index=True)
     result: Mapped[str] = mapped_column(String(16))
     scheduled_due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
     next_due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     ease_factor_after: Mapped[float] = mapped_column(Float)
     interval_days_after: Mapped[int] = mapped_column(Integer)
     repetitions_after: Mapped[int] = mapped_column(Integer)
+    # FSRS card state around this review; "new" means first-ever review of the card.
+    state_before: Mapped[str | None] = mapped_column(String(16), nullable=True, index=True)
+    card_before_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    card_after_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     flashcard: Mapped["Flashcard"] = relationship(back_populates="reviews")

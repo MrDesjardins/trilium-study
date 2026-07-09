@@ -39,11 +39,11 @@
   {% set mode_path = "/study" if review_mode else "/study/browse" %}
   <div class="class-filter-bar study-class-bar">
     <a class="class-filter-chip {% if not selected_class %}active{% endif %}" href="{{ mode_path }}" data-class-chip="">
-      All classes <span class="chip-due" data-chip-due>{{ class_options|sum(attribute="due") }} due</span>
+      All classes <span class="chip-due" data-chip-due>{{ class_options|sum(attribute="due") }} due{% if class_options|sum(attribute="new") %} · {{ class_options|sum(attribute="new") }} new{% endif %}</span>
     </a>
     {% for opt in class_options %}
     <a class="class-filter-chip {% if selected_class == opt.class_title %}active{% endif %}" href="{{ mode_path }}?class={{ opt.class_title|urlencode }}" data-class-chip="{{ opt.class_title }}">
-      {{ opt.class_title }} <span class="chip-due" data-chip-due>{{ opt.due }} due</span>
+      {{ opt.class_title }} <span class="chip-due" data-chip-due>{{ opt.due }} due{% if opt.new %} · {{ opt.new }} new{% endif %}</span>
     </a>
     {% endfor %}
   </div>
@@ -68,6 +68,10 @@
       <div class="goal-track"><div class="goal-fill" data-goal-fill style="width: {{ [stats.reviewed_today * 100 // stats.daily_goal, 100]|min }}%"></div></div>
     </article>
     <article class="study-stat-card">
+      <strong><span data-stat="new_today">{{ stats.new_today }}</span><span class="goal-target"> / {{ stats.daily_new_cards }}</span></strong>
+      <span>New today</span>
+    </article>
+    <article class="study-stat-card">
       <strong data-stat="total_cards">{{ stats.total_cards }}</strong>
       <span>Total cards</span>
     </article>
@@ -76,6 +80,37 @@
   <div class="goal-banner {% if not stats.goal_reached or not stats.reviewed_today %}hidden{% endif %}" data-goal-banner>
     🎉 Daily goal reached — nice work! Keep going or take a break.
   </div>
+
+  <section class="study-analytics" data-study-analytics>
+    <article class="study-stat-card">
+      <strong>{{ analytics.streak }}</strong>
+      <span>Day streak</span>
+    </article>
+    <article class="study-stat-card">
+      <strong>{% if analytics.retention_percent is not none %}{{ analytics.retention_percent }}%{% else %}—{% endif %}</strong>
+      <span>Retention (30d)</span>
+    </article>
+    <article class="study-forecast">
+      <p class="muted study-analytics-label">Due in the next 7 days</p>
+      <div class="study-forecast-bars">
+        {% set max_forecast = (analytics.forecast|map(attribute="count")|list + [1])|max %}
+        {% for day in analytics.forecast %}
+        <div class="forecast-bar-col" title="{{ day.date }}: {{ day.count }} due">
+          <div class="forecast-bar" style="height: {{ (day.count * 100 // max_forecast) if max_forecast else 0 }}%"></div>
+          <span class="forecast-bar-label">{{ day.label }}</span>
+        </div>
+        {% endfor %}
+      </div>
+    </article>
+    <article class="study-heatmap">
+      <p class="muted study-analytics-label">Last 13 weeks</p>
+      <div class="heatmap-grid">
+        {% for cell in analytics.heatmap %}
+        <div class="heat-cell heat-{{ cell.level }}" title="{{ cell.date }}: {{ cell.count }} review(s)"></div>
+        {% endfor %}
+      </div>
+    </article>
+  </section>
 
   <div data-study-active class="{% if not flashcard %}hidden{% endif %}">
   {% if browse_state %}
@@ -113,6 +148,42 @@
       <a href="/lessons/{{ flashcard.lesson.id if flashcard else 0 }}" data-lesson-link>Open lesson details</a>
       <a href="{{ trilium_note_url or '#' }}" target="_blank" rel="noreferrer" data-trilium-link class="{% if not trilium_note_url %}hidden{% endif %}">Read more in Trilium</a>
     </div>
+    {% if review_mode %}
+    <div
+      class="study-card-tools"
+      data-card-tools
+      data-suspend-url="/study/{{ flashcard.id if flashcard else 0 }}/suspend"
+      data-edit-url="/study/{{ flashcard.id if flashcard else 0 }}/edit"
+      data-delete-url="/study/{{ flashcard.id if flashcard else 0 }}/delete"
+    >
+      <input type="hidden" value="{{ selected_class or '' }}" data-tool-class />
+      <button type="button" class="secondary-button" data-tool="edit">Edit</button>
+      <button type="button" class="secondary-button" data-tool="suspend">Suspend</button>
+      <button type="button" class="secondary-button" data-tool="delete">Delete</button>
+      <button type="button" class="secondary-button" data-tool="undo">Undo last review</button>
+    </div>
+    <div class="study-edit-panel hidden" data-edit-panel>
+      <label>
+        Prompt
+        <textarea data-edit-prompt rows="2">{{ flashcard.prompt if flashcard else "" }}</textarea>
+      </label>
+      <label>
+        Answer
+        <textarea data-edit-answer rows="2">{{ flashcard.answer if flashcard else "" }}</textarea>
+      </label>
+      <div class="study-edit-actions">
+        <button type="button" class="secondary-button" data-edit-cancel>Cancel</button>
+        <button type="button" class="reset-danger" data-edit-save>Save</button>
+      </div>
+    </div>
+    <div class="study-delete-confirm hidden" data-delete-confirm>
+      <p class="muted">Delete this card permanently? Its review history will be removed too.</p>
+      <div class="reset-confirm-actions">
+        <button type="button" class="secondary-button" data-delete-cancel>Cancel</button>
+        <button type="button" class="reset-danger" data-delete-confirm-btn>Confirm delete</button>
+      </div>
+    </div>
+    {% endif %}
   </div>
 
   {% if review_mode %}
@@ -142,12 +213,18 @@
     Generate a lesson first.
     {% endif %}
   </p>
+  <p class="muted {% if not review_mode or not stats.next_due_seconds %}hidden{% endif %}" data-next-due-note>
+    Next card due in about <span data-next-due-minutes>{{ ((stats.next_due_seconds or 0) / 60)|round(0, "ceil")|int }}</span> minute(s) — this page will refresh itself.
+  </p>
   <div class="study-empty-actions" data-study-empty-actions>
     {% if browse_entry_url %}
     <a class="study-toolbar-link" href="{{ browse_entry_url }}" data-browse-entry-link>Browse cards</a>
     {% endif %}
     {% if selected_class %}
     <a class="study-toolbar-link" href="/study">Study all classes</a>
+    {% endif %}
+    {% if review_mode %}
+    <button type="button" class="secondary-button" data-empty-undo>Undo last review</button>
     {% endif %}
     {% if browse_entry_url %}
     <form method="post" action="/study/reset" class="study-reset-form" data-reset-form>
@@ -212,7 +289,7 @@
     const emptyActions = document.querySelector("[data-study-empty-actions]");
     const browseToolbarLink = document.querySelector("[data-browse-toolbar]");
 
-    const statKeys = ["due_now", "remaining_after_current", "failed_today", "reviewed_today", "total_cards"];
+    const statKeys = ["due_now", "remaining_after_current", "failed_today", "reviewed_today", "new_today", "total_cards"];
     const reviewButtons = () => form.querySelectorAll(".study-review-btn");
     let celebrating = false;
     let submitting = false;
@@ -266,6 +343,22 @@
       syncReviewButtons();
     };
 
+    let nextDueSeconds = {{ stats.next_due_seconds if stats.next_due_seconds is not none else "null" }};
+    let nextDueTimer = null;
+
+    const scheduleNextDueRefresh = () => {
+      const note = document.querySelector("[data-next-due-note]");
+      const minutes = document.querySelector("[data-next-due-minutes]");
+      window.clearTimeout(nextDueTimer);
+      const queueEmpty = Boolean(activeRegion?.classList.contains("hidden"));
+      // Only surface the countdown / auto-refresh for near-term learning steps.
+      const shouldWait = queueEmpty && nextDueSeconds !== null && nextDueSeconds <= 3600;
+      setHidden(note, !shouldWait);
+      if (!shouldWait) return;
+      if (minutes) minutes.textContent = String(Math.max(1, Math.ceil(nextDueSeconds / 60)));
+      nextDueTimer = window.setTimeout(() => window.location.reload(), (nextDueSeconds + 2) * 1000);
+    };
+
     const updateStats = (stats) => {
       for (const key of statKeys) {
         const node = document.querySelector(`[data-stat="${key}"]`);
@@ -281,18 +374,23 @@
       }
       goalCard?.classList.toggle("goal-reached", Boolean(stats.goal_reached));
       goalBanner?.classList.toggle("hidden", !stats.goal_reached);
+      nextDueSeconds = stats.next_due_seconds ?? null;
     };
+
+    const chipLabel = (due, fresh) => `${due} due${fresh ? ` · ${fresh} new` : ""}`;
 
     const updateClassChips = (classOptions) => {
       if (!Array.isArray(classOptions)) return;
       let allDue = 0;
+      let allNew = 0;
       for (const option of classOptions) {
         allDue += option.due || 0;
+        allNew += option.new || 0;
         const chip = document.querySelector(`[data-class-chip="${CSS.escape(option.class_title)}"] [data-chip-due]`);
-        if (chip) chip.textContent = `${option.due} due`;
+        if (chip) chip.textContent = chipLabel(option.due, option.new);
       }
       const allChip = document.querySelector('[data-class-chip=""] [data-chip-due]');
-      if (allChip) allChip.textContent = `${allDue} due`;
+      if (allChip) allChip.textContent = chipLabel(allDue, allNew);
     };
 
     const applyFlashcard = (card) => {
@@ -318,11 +416,13 @@
             : "Generate a lesson first.";
         }
         setHidden(emptyActions, totalCards === 0);
+        scheduleNextDueRefresh();
         return;
       }
 
       setHidden(activeRegion, false);
       setHidden(emptyRegion, true);
+      scheduleNextDueRefresh();
       const lessonBadge = document.querySelector("[data-lesson-badge]");
       const lessonBadgeTitle = document.querySelector("[data-lesson-badge-title]");
       if (lessonBadge && lessonBadgeTitle) {
@@ -345,6 +445,18 @@
         }
       }
       form.action = card.review_url;
+      const cardTools = document.querySelector("[data-card-tools]");
+      if (cardTools) {
+        cardTools.dataset.suspendUrl = card.suspended ? card.unsuspend_url : card.suspend_url;
+        cardTools.dataset.editUrl = card.edit_url;
+        cardTools.dataset.deleteUrl = card.delete_url;
+        const suspendButton = cardTools.querySelector('[data-tool="suspend"]');
+        if (suspendButton) suspendButton.textContent = card.suspended ? "Unsuspend" : "Suspend";
+      }
+      const editPrompt = document.querySelector("[data-edit-prompt]");
+      const editAnswer = document.querySelector("[data-edit-answer]");
+      if (editPrompt) editPrompt.value = card.prompt;
+      if (editAnswer) editAnswer.value = card.answer;
       resetFlashcardFace(true);
       resetCelebration();
       syncReviewButtons();
@@ -440,6 +552,125 @@
     });
 
     syncReviewButtons();
+    scheduleNextDueRefresh();
+
+    const cardTools = document.querySelector("[data-card-tools]");
+    const editPanel = document.querySelector("[data-edit-panel]");
+    const deleteConfirmPanel = document.querySelector("[data-delete-confirm]");
+    let toolBusy = false;
+
+    const currentClassTitle = () => document.querySelector("[data-tool-class]")?.value || "";
+
+    const showStudyFlash = (message, level) => {
+      const banner = document.querySelector("[data-flash-banner]");
+      if (!banner || !message) return;
+      const heading = banner.querySelector("h3");
+      const eyebrow = banner.querySelector(".eyebrow");
+      if (heading) heading.textContent = message;
+      if (eyebrow) eyebrow.textContent = level === "error" ? "Error" : "Status";
+      banner.classList.toggle("flash-banner-error", level === "error");
+      banner.classList.remove("hidden");
+    };
+
+    // Returns the payload on success, null when the request failed or was skipped.
+    const postTool = async (url, body) => {
+      if (toolBusy) return null;
+      toolBusy = true;
+      try {
+        const response = await fetch(url, {
+          method: "POST",
+          headers: { Accept: "application/json" },
+          body,
+        });
+        const payload = await response.json().catch(() => null);
+        if (!response.ok) {
+          showStudyFlash(payload?.message || payload?.detail || `Request failed (${response.status})`, "error");
+          return null;
+        }
+        updateStats(payload.stats);
+        updateClassChips(payload.class_options);
+        applyFlashcard(payload.flashcard);
+        if (browseToolbarLink) setHidden(browseToolbarLink, !payload.browse_entry_url);
+        if (payload.message) showStudyFlash(payload.message, payload.level || "info");
+        return payload;
+      } catch (error) {
+        console.error(error);
+        showStudyFlash("Network error — the action was not saved.", "error");
+        return null;
+      } finally {
+        toolBusy = false;
+      }
+    };
+
+    const toolFormData = () => {
+      const body = new FormData();
+      body.set("class_title", currentClassTitle());
+      return body;
+    };
+
+    cardTools?.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-tool]");
+      if (!button) return;
+      const tool = button.dataset.tool;
+      if (tool === "edit") {
+        setHidden(editPanel, false);
+        return;
+      }
+      if (tool === "delete") {
+        setHidden(deleteConfirmPanel, false);
+        return;
+      }
+      if (tool === "suspend") {
+        postTool(cardTools.dataset.suspendUrl, toolFormData());
+        return;
+      }
+      if (tool === "undo") {
+        postTool("/study/undo", toolFormData());
+      }
+    });
+
+    document.querySelector("[data-empty-undo]")?.addEventListener("click", () => {
+      postTool("/study/undo", toolFormData());
+    });
+
+    document.querySelector("[data-edit-cancel]")?.addEventListener("click", () => {
+      setHidden(editPanel, true);
+    });
+    document.querySelector("[data-edit-save]")?.addEventListener("click", async () => {
+      const body = toolFormData();
+      body.set("prompt", document.querySelector("[data-edit-prompt]")?.value || "");
+      body.set("answer", document.querySelector("[data-edit-answer]")?.value || "");
+      const payload = await postTool(cardTools.dataset.editUrl, body);
+      // Keep the panel (and the user's text) open when the save was rejected.
+      if (payload && payload.level !== "error") setHidden(editPanel, true);
+    });
+
+    document.querySelector("[data-delete-cancel]")?.addEventListener("click", () => {
+      setHidden(deleteConfirmPanel, true);
+    });
+    document.querySelector("[data-delete-confirm-btn]")?.addEventListener("click", () => {
+      postTool(cardTools.dataset.deleteUrl, toolFormData());
+      setHidden(deleteConfirmPanel, true);
+    });
+
+    document.addEventListener("keydown", (event) => {
+      if (event.altKey || event.ctrlKey || event.metaKey) return;
+      const tag = event.target instanceof HTMLElement ? event.target.tagName : "";
+      if (["INPUT", "TEXTAREA", "SELECT"].includes(tag)) return;
+      if (!cardTools) return;
+      if (event.key === "u") {
+        // Undo works even with an empty queue — misgrading the last card is
+        // exactly when it matters.
+        event.preventDefault();
+        postTool("/study/undo", toolFormData());
+        return;
+      }
+      if (activeRegion?.classList.contains("hidden")) return;
+      if (event.key === "e") {
+        event.preventDefault();
+        setHidden(editPanel, false);
+      }
+    });
   })();
 </script>
 {% endblock %}

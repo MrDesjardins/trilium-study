@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
@@ -12,17 +13,17 @@ from app.main import create_app
 from app.models import Course, Flashcard, FlashcardReview, Job, JobEvent, Lesson, YouTubeUpload
 
 
-def make_settings(tmp_path: Path) -> Settings:
-    return Settings.model_validate(
-        {
-            "TRILIUM_URL": "http://example",
-            "TRILIUM_ETAPI_TOKEN": "token",
-            "TRILIUM_PARENT_NOTE_ID": "course",
-            "DATABASE_URL": f"sqlite:///{tmp_path / 'app.db'}",
-            "WORKSPACE_DIR": str(tmp_path / "workspace"),
-            "LOG_DIR": str(tmp_path / "logs"),
-        }
-    )
+def make_settings(tmp_path: Path, **overrides: str) -> Settings:
+    data = {
+        "TRILIUM_URL": "http://example",
+        "TRILIUM_ETAPI_TOKEN": "token",
+        "TRILIUM_PARENT_NOTE_ID": "course",
+        "DATABASE_URL": f"sqlite:///{tmp_path / 'app.db'}",
+        "WORKSPACE_DIR": str(tmp_path / "workspace"),
+        "LOG_DIR": str(tmp_path / "logs"),
+    }
+    data.update(overrides)
+    return Settings.model_validate(data)
 
 
 def seed_study_data(session_factory, *, now: datetime) -> dict[str, int]:
@@ -41,6 +42,10 @@ def seed_study_data(session_factory, *, now: datetime) -> dict[str, int]:
             due_at=now - timedelta(hours=2),
             repetitions=2,
             interval_days=3,
+            stability=5.0,
+            difficulty=5.0,
+            fsrs_state="review",
+            last_reviewed_at=now - timedelta(days=3),
         )
         future_card = Flashcard(
             lesson_id=lesson.id,
@@ -49,6 +54,10 @@ def seed_study_data(session_factory, *, now: datetime) -> dict[str, int]:
             due_at=now + timedelta(days=3),
             repetitions=4,
             interval_days=10,
+            stability=10.0,
+            difficulty=4.0,
+            fsrs_state="review",
+            last_reviewed_at=now - timedelta(days=7),
         )
         failed_due_card = Flashcard(
             lesson_id=lesson.id,
@@ -57,6 +66,10 @@ def seed_study_data(session_factory, *, now: datetime) -> dict[str, int]:
             due_at=now - timedelta(minutes=10),
             repetitions=0,
             interval_days=1,
+            stability=1.0,
+            difficulty=6.0,
+            fsrs_state="relearning",
+            last_reviewed_at=now - timedelta(hours=3),
         )
         session.add_all([due_card, future_card, failed_due_card])
         session.flush()
@@ -72,6 +85,7 @@ def seed_study_data(session_factory, *, now: datetime) -> dict[str, int]:
                     ease_factor_after=2.6,
                     interval_days_after=1,
                     repetitions_after=1,
+                    state_before="review",
                 ),
                 FlashcardReview(
                     flashcard_id=failed_due_card.id,
@@ -82,6 +96,7 @@ def seed_study_data(session_factory, *, now: datetime) -> dict[str, int]:
                     ease_factor_after=2.3,
                     interval_days_after=1,
                     repetitions_after=0,
+                    state_before="review",
                 ),
             ]
         )
@@ -192,7 +207,7 @@ def test_reset_flashcards_requeues_all_cards(tmp_path: Path):
         response = client.post("/study/reset", follow_redirects=True)
 
     assert response.status_code == 200
-    assert "Reset 3 flashcard(s) for a fresh study pass." in response.text
+    assert "Reset 3 flashcard(s)." in response.text
 
     with session_factory() as session:
         cards = session.query(Flashcard).order_by(Flashcard.id.asc()).all()
@@ -201,6 +216,8 @@ def test_reset_flashcards_requeues_all_cards(tmp_path: Path):
             assert card.repetitions == 0
             assert card.interval_days == 0
             assert card.ease_factor == 2.5
+            assert card.stability is None
+            assert card.fsrs_state is None
             due_at = card.due_at if card.due_at.tzinfo else card.due_at.replace(tzinfo=timezone.utc)
             assert due_at <= datetime.now(timezone.utc)
         assert {card.id for card in cards} == {ids["due_card_id"], ids["future_card_id"], ids["failed_due_card_id"]}
@@ -240,6 +257,98 @@ def test_queue_audio_lesson_posts_youtube_url(monkeypatch, tmp_path: Path):
         "queue_url": "http://127.0.0.1:8000/queue/add",
         "youtube_url": "https://www.youtube.com/watch?v=abc123",
     }
+
+
+def test_queue_audio_lesson_returns_json_without_redirect(monkeypatch, tmp_path: Path):
+    settings = make_settings(tmp_path)
+    session_factory, engine = make_session_factory(settings)
+    Base.metadata.create_all(bind=engine)
+
+    with session_factory() as session:
+        course = Course(trilium_note_id="course", title="Course", parent_note_id=None, traversal_hash="course")
+        session.add(course)
+        session.flush()
+        lesson = Lesson(course_id=course.id, trilium_note_id="lesson-1", title="Lesson 1", parent_note_id="course", content_hash="hash")
+        session.add(lesson)
+        session.flush()
+        session.add(YouTubeUpload(lesson_id=lesson.id, video_id="abc123", video_url="https://www.youtube.com/watch?v=abc123"))
+        session.commit()
+        lesson_id = lesson.id
+
+    async def fake_enqueue(queue_url: str, youtube_url: str) -> None:
+        return None
+
+    monkeypatch.setattr("app.main.enqueue_audio_stream", fake_enqueue)
+
+    app = create_app(settings)
+    with TestClient(app) as client:
+        response = client.post(f"/lessons/{lesson_id}/queue-audio", headers={"Accept": "application/json"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["level"] == "info"
+    assert "Queued Lesson 1" in payload["message"]
+
+
+def test_queue_audio_all_queues_every_lesson_with_a_youtube_upload(monkeypatch, tmp_path: Path):
+    settings = make_settings(tmp_path)
+    session_factory, engine = make_session_factory(settings)
+    Base.metadata.create_all(bind=engine)
+
+    with session_factory() as session:
+        course = Course(trilium_note_id="course", title="Course", parent_note_id=None, traversal_hash="course")
+        session.add(course)
+        session.flush()
+        with_video = Lesson(course_id=course.id, trilium_note_id="lesson-1", title="Lesson 1", parent_note_id="course", content_hash="hash")
+        also_with_video = Lesson(course_id=course.id, trilium_note_id="lesson-2", title="Lesson 2", parent_note_id="course", content_hash="hash")
+        without_video = Lesson(course_id=course.id, trilium_note_id="lesson-3", title="Lesson 3", parent_note_id="course", content_hash="hash")
+        session.add_all([with_video, also_with_video, without_video])
+        session.flush()
+        session.add(YouTubeUpload(lesson_id=with_video.id, video_id="a", video_url="https://www.youtube.com/watch?v=a"))
+        session.add(YouTubeUpload(lesson_id=also_with_video.id, video_id="b", video_url="https://www.youtube.com/watch?v=b"))
+        session.commit()
+        course_id = course.id
+
+    queued_urls: list[str] = []
+
+    async def fake_enqueue(queue_url: str, youtube_url: str) -> None:
+        queued_urls.append(youtube_url)
+
+    monkeypatch.setattr("app.main.enqueue_audio_stream", fake_enqueue)
+
+    app = create_app(settings)
+    with TestClient(app) as client:
+        response = client.post(f"/courses/{course_id}/queue-audio-all", headers={"Accept": "application/json"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["level"] == "info"
+    assert "Queued 2 lesson(s)" in payload["message"]
+    assert sorted(queued_urls) == ["https://www.youtube.com/watch?v=a", "https://www.youtube.com/watch?v=b"]
+
+
+def test_queue_audio_all_requires_at_least_one_youtube_upload(tmp_path: Path):
+    settings = make_settings(tmp_path)
+    session_factory, engine = make_session_factory(settings)
+    Base.metadata.create_all(bind=engine)
+
+    with session_factory() as session:
+        course = Course(trilium_note_id="course", title="Course", parent_note_id=None, traversal_hash="course")
+        session.add(course)
+        session.flush()
+        lesson = Lesson(course_id=course.id, trilium_note_id="lesson-1", title="Lesson 1", parent_note_id="course", content_hash="hash")
+        session.add(lesson)
+        session.commit()
+        course_id = course.id
+
+    app = create_app(settings)
+    with TestClient(app) as client:
+        response = client.post(f"/courses/{course_id}/queue-audio-all", headers={"Accept": "application/json"})
+
+    assert response.status_code == 409
+    payload = response.json()
+    assert payload["level"] == "error"
+    assert "No lessons in this course have a YouTube upload yet." in payload["message"]
 
 
 def test_dashboard_shows_job_events_in_los_angeles_time(tmp_path: Path):
@@ -578,6 +687,266 @@ def test_archived_lesson_cannot_be_generated(tmp_path: Path):
     assert "cannot be generated." in response.text
     with session_factory() as session:
         assert session.scalar(select(func.count()).select_from(Job)) == 0
+
+
+def test_new_card_daily_limit_gates_the_queue(tmp_path: Path):
+    now = datetime.now(timezone.utc)
+    settings = make_settings(tmp_path)
+    session_factory, engine = make_session_factory(settings)
+    Base.metadata.create_all(bind=engine)
+
+    with session_factory() as session:
+        course = Course(trilium_note_id="course", title="Course", parent_note_id=None, traversal_hash="course")
+        session.add(course)
+        session.flush()
+        lesson = Lesson(course_id=course.id, trilium_note_id="lesson-1", title="Lesson 1", parent_note_id="course", content_hash="hash")
+        session.add(lesson)
+        session.flush()
+        session.add_all(
+            [
+                Flashcard(lesson_id=lesson.id, prompt="New A", answer="A", due_at=now),
+                Flashcard(lesson_id=lesson.id, prompt="New B", answer="B", due_at=now),
+            ]
+        )
+        session.commit()
+
+    app = create_app(settings)
+    with TestClient(app) as client:
+        stats_response = client.get("/study")
+        assert "1 / 1" not in stats_response.text  # sanity: default daily_new_cards is 10
+
+        first = client.post("/study/1/review", data={"result": "pass"}, headers={"Accept": "application/json"})
+        assert first.status_code == 200
+        assert first.json()["stats"]["new_today"] == 1
+
+
+def test_new_card_limit_of_one_withholds_second_new_card(tmp_path: Path):
+    now = datetime.now(timezone.utc)
+    # Learn-ahead off so the just-reviewed learning card is not served back.
+    settings = make_settings(tmp_path, DAILY_NEW_CARDS="1", LEARN_AHEAD_MINUTES="0")
+    session_factory, engine = make_session_factory(settings)
+    Base.metadata.create_all(bind=engine)
+
+    with session_factory() as session:
+        course = Course(trilium_note_id="course", title="Course", parent_note_id=None, traversal_hash="course")
+        session.add(course)
+        session.flush()
+        lesson = Lesson(course_id=course.id, trilium_note_id="lesson-1", title="Lesson 1", parent_note_id="course", content_hash="hash")
+        session.add(lesson)
+        session.flush()
+        card_a = Flashcard(lesson_id=lesson.id, prompt="New A", answer="A", due_at=now)
+        card_b = Flashcard(lesson_id=lesson.id, prompt="New B", answer="B", due_at=now)
+        session.add_all([card_a, card_b])
+        session.commit()
+        card_a_id = card_a.id
+
+    app = create_app(settings)
+    with TestClient(app) as client:
+        review = client.post(
+            f"/study/{card_a_id}/review", data={"result": "pass"}, headers={"Accept": "application/json"}
+        )
+        assert review.status_code == 200
+        payload = review.json()
+        assert payload["stats"]["new_today"] == 1
+        # Second new card should be withheld until tomorrow.
+        assert payload["flashcard"] is None
+
+
+def test_learn_ahead_serves_learning_step_after_failing_last_card(tmp_path: Path):
+    now = datetime.now(timezone.utc)
+    settings = make_settings(tmp_path)
+    session_factory, engine = make_session_factory(settings)
+    Base.metadata.create_all(bind=engine)
+
+    with session_factory() as session:
+        course = Course(trilium_note_id="course", title="Course", parent_note_id=None, traversal_hash="course")
+        session.add(course)
+        session.flush()
+        lesson = Lesson(course_id=course.id, trilium_note_id="lesson-1", title="Lesson 1", parent_note_id="course", content_hash="hash")
+        session.add(lesson)
+        session.flush()
+        card = Flashcard(lesson_id=lesson.id, prompt="Only card", answer="A", due_at=now)
+        session.add(card)
+        session.commit()
+        card_id = card.id
+
+    app = create_app(settings)
+    with TestClient(app) as client:
+        # Failing the only card puts it in a learning step minutes away; with
+        # nothing else to do the queue serves it early instead of going empty.
+        first = client.post(f"/study/{card_id}/review", data={"result": "again"}, headers={"Accept": "application/json"})
+        assert first.status_code == 200
+        payload = first.json()
+        assert payload["flashcard"] is not None
+        assert payload["flashcard"]["id"] == card_id
+
+        # Simulate real elapsed time (the anti-double-submit guard only blocks
+        # a regrade within a few seconds of the last one).
+        with session_factory() as session:
+            card = session.get(Flashcard, card_id)
+            card.last_reviewed_at = card.last_reviewed_at - timedelta(minutes=1)
+            session.commit()
+
+        # The learn-ahead card can actually be graded despite due_at being in the future.
+        second = client.post(f"/study/{card_id}/review", data={"result": "pass"}, headers={"Accept": "application/json"})
+        assert second.status_code == 200
+
+    with session_factory() as session:
+        assert session.query(FlashcardReview).filter_by(flashcard_id=card_id).count() == 2
+
+
+def test_learn_ahead_does_not_allow_double_submitting_a_learning_card(tmp_path: Path):
+    # Learning/relearning steps are minutes long -- shorter than the default
+    # learn-ahead window -- so a naive "due_at within horizon" check alone
+    # would keep accepting a rapid resubmission of the same card forever.
+    now = datetime.now(timezone.utc)
+    settings = make_settings(tmp_path)
+    session_factory, engine = make_session_factory(settings)
+    Base.metadata.create_all(bind=engine)
+
+    with session_factory() as session:
+        course = Course(trilium_note_id="course", title="Course", parent_note_id=None, traversal_hash="course")
+        session.add(course)
+        session.flush()
+        lesson = Lesson(course_id=course.id, trilium_note_id="lesson-1", title="Lesson 1", parent_note_id="course", content_hash="hash")
+        session.add(lesson)
+        session.flush()
+        card = Flashcard(lesson_id=lesson.id, prompt="Only card", answer="A", due_at=now)
+        session.add(card)
+        session.commit()
+        card_id = card.id
+
+    app = create_app(settings)
+    with TestClient(app) as client:
+        first = client.post(f"/study/{card_id}/review", data={"result": "again"}, headers={"Accept": "application/json"})
+        assert first.status_code == 200
+
+        # A double-click / retried POST milliseconds later must not grade again.
+        duplicate = client.post(f"/study/{card_id}/review", data={"result": "pass"}, headers={"Accept": "application/json"})
+        assert duplicate.status_code == 200
+
+    with session_factory() as session:
+        assert session.query(FlashcardReview).filter_by(flashcard_id=card_id).count() == 1
+
+
+def test_suspend_edit_delete_and_undo_routes(tmp_path: Path):
+    now = datetime.now(timezone.utc)
+    settings = make_settings(tmp_path)
+    session_factory, engine = make_session_factory(settings)
+    Base.metadata.create_all(bind=engine)
+    ids = seed_study_data(session_factory, now=now)
+
+    app = create_app(settings)
+    with TestClient(app) as client:
+        suspend = client.post(
+            f"/study/{ids['due_card_id']}/suspend", headers={"Accept": "application/json"}
+        )
+        assert suspend.status_code == 200
+        with session_factory() as session:
+            assert session.get(Flashcard, ids["due_card_id"]).suspended is True
+
+        unsuspend = client.post(
+            f"/study/{ids['due_card_id']}/unsuspend", headers={"Accept": "application/json"}
+        )
+        assert unsuspend.status_code == 200
+        with session_factory() as session:
+            assert session.get(Flashcard, ids["due_card_id"]).suspended is False
+
+        edited = client.post(
+            f"/study/{ids['due_card_id']}/edit",
+            data={"prompt": "Updated prompt", "answer": "Updated answer"},
+            headers={"Accept": "application/json"},
+        )
+        assert edited.status_code == 200
+        with session_factory() as session:
+            card = session.get(Flashcard, ids["due_card_id"])
+            assert card.prompt == "Updated prompt"
+            assert card.answer == "Updated answer"
+
+        review = client.post(
+            f"/study/{ids['due_card_id']}/review", data={"result": "pass"}, headers={"Accept": "application/json"}
+        )
+        assert review.status_code == 200
+        with session_factory() as session:
+            assert session.query(FlashcardReview).filter_by(flashcard_id=ids["due_card_id"]).count() == 2
+
+        undo = client.post("/study/undo", headers={"Accept": "application/json"})
+        assert undo.status_code == 200
+        assert undo.json()["flashcard"]["id"] == ids["due_card_id"]
+        with session_factory() as session:
+            assert session.query(FlashcardReview).filter_by(flashcard_id=ids["due_card_id"]).count() == 1
+
+        delete = client.post(
+            f"/study/{ids['future_card_id']}/delete", headers={"Accept": "application/json"}
+        )
+        assert delete.status_code == 200
+        with session_factory() as session:
+            assert session.get(Flashcard, ids["future_card_id"]) is None
+
+
+def test_study_page_renders_analytics_section(tmp_path: Path):
+    now = datetime.now(timezone.utc)
+    settings = make_settings(tmp_path)
+    session_factory, engine = make_session_factory(settings)
+    Base.metadata.create_all(bind=engine)
+    seed_study_data(session_factory, now=now)
+
+    app = create_app(settings)
+    with TestClient(app) as client:
+        response = client.get("/study")
+
+    assert response.status_code == 200
+    assert "Day streak" in response.text
+    assert "Retention (30d)" in response.text
+    assert "Due in the next 7 days" in response.text
+    assert "Last 13 weeks" in response.text
+
+
+def test_reviewed_today_uses_los_angeles_day_boundary(tmp_path: Path):
+    now = datetime.now(timezone.utc)
+    settings = make_settings(tmp_path)
+    session_factory, engine = make_session_factory(settings)
+    Base.metadata.create_all(bind=engine)
+
+    with session_factory() as session:
+        course = Course(trilium_note_id="course", title="Course", parent_note_id=None, traversal_hash="course")
+        session.add(course)
+        session.flush()
+        lesson = Lesson(course_id=course.id, trilium_note_id="lesson-1", title="Lesson 1", parent_note_id="course", content_hash="hash")
+        session.add(lesson)
+        session.flush()
+        card = Flashcard(lesson_id=lesson.id, prompt="Q", answer="A", due_at=now)
+        session.add(card)
+        session.flush()
+        # A review one minute before today's Los Angeles midnight belongs to the
+        # previous LA day and must never count toward today's totals.
+        la_midnight_utc = (
+            now.astimezone(ZoneInfo("America/Los_Angeles"))
+            .replace(hour=0, minute=0, second=0, microsecond=0)
+            .astimezone(timezone.utc)
+        )
+        review_time = la_midnight_utc - timedelta(minutes=1)
+        session.add(
+            FlashcardReview(
+                flashcard_id=card.id,
+                result="pass",
+                scheduled_due_at=review_time,
+                reviewed_at=review_time,
+                next_due_at=review_time + timedelta(days=1),
+                ease_factor_after=2.5,
+                interval_days_after=1,
+                repetitions_after=1,
+                state_before="new",
+            )
+        )
+        session.commit()
+
+    app = create_app(settings)
+    with TestClient(app) as client:
+        page = client.get("/study")
+
+    assert page.status_code == 200
+    assert '<span data-stat="reviewed_today">0</span>' in page.text
 
 
 def test_queue_audio_lesson_requires_youtube_upload(tmp_path: Path):

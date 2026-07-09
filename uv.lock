@@ -575,6 +575,15 @@ wheels = [
 ]
 
 [[package]]
+name = "fsrs"
+version = "5.1.3"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ae/9f/3dd4e95a381f1ff57ff7977cb43001c5f0a162a5082453639b0d0324101e/fsrs-5.1.3.tar.gz", hash = "sha256:cfbf178ace3adee7d45b4a755bef17df9c0161b8aea249e86506492123d5dbb7", size = 24553, upload-time = "2025-03-29T17:16:26.449Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2b/14/a82ec7f5129568248429e3e81c8cba93d2e535408068913c6611b8e4da30/fsrs-5.1.3-py3-none-any.whl", hash = "sha256:242616570261d79318b3a9af22de93e97806b9813cc7194c2a0d844959d36726", size = 17486, upload-time = "2025-03-29T17:16:25.407Z" },
+]
+
+[[package]]
 name = "fsspec"
 version = "2026.4.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2506,6 +2515,7 @@ source = { editable = "." }
 dependencies = [
     { name = "alembic" },
     { name = "fastapi" },
+    { name = "fsrs" },
     { name = "google-api-python-client" },
     { name = "google-auth-oauthlib" },
     { name = "httpx" },
@@ -2536,6 +2546,7 @@ youtube = [
 requires-dist = [
     { name = "alembic", specifier = ">=1.16.1" },
     { name = "fastapi", specifier = ">=0.116.0" },
+    { name = "fsrs", specifier = ">=5.0,<6" },
     { name = "google-api-python-client", specifier = ">=2.172.0" },
     { name = "google-api-python-client", marker = "extra == 'youtube'", specifier = ">=2.172.0" },
     { name = "google-auth-oauthlib", specifier = ">=1.2.2" },

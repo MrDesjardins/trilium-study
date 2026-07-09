@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings
 from app.content import clean_study_text
-from app.models import Flashcard, FlashcardReview, Lesson, LessonArtifact, YouTubeUpload
+from app.models import Flashcard, Lesson, LessonArtifact, YouTubeUpload
 
 
 STAGES = ["collect", "normalize", "script", "flashcards", "audio", "video", "upload"]
@@ -52,17 +52,6 @@ class GeneratedUpload:
     video_id: str
     video_url: str
     response: dict[str, Any]
-
-
-@dataclass
-class ReviewOutcome:
-    result: str
-    scheduled_due_at: datetime
-    reviewed_at: datetime
-    next_due_at: datetime
-    ease_factor_after: float
-    interval_days_after: int
-    repetitions_after: int
 
 
 class ScriptResponsePayload(BaseModel):
@@ -263,25 +252,55 @@ class DefaultScriptGenerator:
         raise RuntimeError(last_error)
 
 
+FLASHCARD_SYSTEM_PROMPT = (
+    "You create spaced-repetition flashcards from a lesson script. Rules: each card tests "
+    "exactly one atomic fact or distinction; the front is a specific question that can be "
+    "answered without seeing the script; never ask yes/no questions; never ask vague prompts "
+    "like 'what is the key idea of X'; answers are one short sentence or phrase, no lists, no "
+    "restating the question; write questions so the answer is unambiguous; prefer why/how/"
+    "what-happens-when questions over bare definitions when the script supports them; include "
+    "a short source_excerpt copied from the script for each card."
+)
+
+
 class DefaultFlashcardGenerator:
     def __init__(self, settings: Settings):
         self.settings = settings
         self.client = OpenAI(api_key=settings.openai_api_key) if settings.openai_api_key else None
+
+    def target_card_count(self, script_text: str) -> int:
+        return min(30, max(6, round(script_word_count(script_text) / 120)))
+
+    def build_prompt(self, lesson_title: str, script_text: str) -> list[dict[str, str]]:
+        target_cards = self.target_card_count(script_text)
+        return [
+            {"role": "system", "content": FLASHCARD_SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": (
+                    f"Lesson: {lesson_title}\n\nCreate about {target_cards} flashcards (fewer if the "
+                    f"script is thin; never pad with redundant cards).\n\n{script_text}"
+                ),
+            },
+        ]
 
     def generate(self, lesson_title: str, script_text: str) -> list[GeneratedFlashcard]:
         if not self.client:
             lines = [line.strip() for line in script_text.splitlines() if line.strip()]
             cards: list[GeneratedFlashcard] = []
             for line in lines[:5]:
-                cards.append(GeneratedFlashcard(prompt=f"What is the key idea of: {line[:48]}?", answer=line, source_excerpt=line))
+                cards.append(
+                    GeneratedFlashcard(
+                        prompt=f"Complete this statement from the lesson: {line[:48]}…",
+                        answer=line,
+                        source_excerpt=line,
+                    )
+                )
             return cards
 
         response = self.client.responses.parse(
             model=self.settings.openai_model,
-            input=[
-                {"role": "system", "content": "Create concise flashcards from the script. Return JSON array of prompt, answer, source_excerpt."},
-                {"role": "user", "content": f"Lesson: {lesson_title}\n\n{script_text}"},
-            ],
+            input=self.build_prompt(lesson_title, script_text),
             text_format=FlashcardResponsePayload,
         )
         payload = response.output_parsed
@@ -516,84 +535,54 @@ def should_skip_stage(session: Session, lesson: Lesson, artifact_type: str, stag
     return bool(artifact and artifact.state == "completed" and artifact.content_hash == content_hash)
 
 
-def replace_flashcards(session: Session, lesson: Lesson, cards: list[GeneratedFlashcard]) -> None:
-    for card in list(lesson.flashcards):
-        session.delete(card)
+def _normalize_prompt(prompt: str) -> str:
+    return " ".join(prompt.lower().split()).strip(" ?.!")
+
+
+def sync_flashcards(session: Session, lesson: Lesson, cards: list[GeneratedFlashcard]) -> None:
+    """Reconcile generated cards with existing ones, preserving scheduling/history for matches.
+
+    Cards are matched by normalized prompt text. Matched cards keep their FSRS
+    state and review history; unmatched old cards are deleted (with their
+    history) and unmatched new cards are inserted as fresh (never-reviewed) cards.
+    """
+    existing_by_prompt: dict[str, Flashcard] = {}
+    for card in lesson.flashcards:
+        existing_by_prompt.setdefault(_normalize_prompt(card.prompt), card)
+
     now = datetime.now(timezone.utc)
+    matched_ids: set[int] = set()
+    seen_keys: set[str] = set()
     for card in cards:
-        session.add(
-            Flashcard(
-                lesson_id=lesson.id,
-                prompt=card.prompt,
-                answer=card.answer,
-                source_excerpt=card.source_excerpt,
-                due_at=now,
+        key = _normalize_prompt(card.prompt)
+        if key in seen_keys:
+            # The generator emitted two variants of the same prompt; keep the first.
+            continue
+        seen_keys.add(key)
+        existing = existing_by_prompt.pop(key, None)
+        if existing is not None:
+            content_changed = existing.answer != card.answer or existing.prompt != card.prompt
+            existing.answer = card.answer
+            existing.source_excerpt = card.source_excerpt
+            # Regenerated content deserves a fresh look; a suspended card whose
+            # content did not change stays suspended (the user parked it).
+            if content_changed:
+                existing.suspended = False
+            matched_ids.add(existing.id)
+        else:
+            session.add(
+                Flashcard(
+                    lesson_id=lesson.id,
+                    prompt=card.prompt,
+                    answer=card.answer,
+                    source_excerpt=card.source_excerpt,
+                    due_at=now,
+                )
             )
-        )
 
-
-def schedule_flashcard_review(flashcard: Flashcard, result: str, reviewed_at: datetime | None = None) -> ReviewOutcome:
-    reviewed_at = reviewed_at or datetime.now(timezone.utc)
-    scheduled_due = flashcard.due_at
-    ease = flashcard.ease_factor
-    reps = flashcard.repetitions
-    interval = flashcard.interval_days
-
-    if result == "again":
-        reps = 0
-        interval = 1
-        ease = max(1.3, ease - 0.2)
-    elif result == "hard":
-        # Card advanced but with friction: barely grow the interval, lower ease.
-        reps += 1
-        interval = max(1, round(max(interval, 1) * 1.2))
-        ease = max(1.3, ease - 0.15)
-    elif result == "easy":
-        reps += 1
-        if reps == 1:
-            interval = 2
-        elif reps == 2:
-            interval = 5
-        else:
-            interval = max(1, round(interval * ease * 1.3))
-        ease = min(3.0, ease + 0.15)
-    else:
-        reps += 1
-        if reps == 1:
-            interval = 1
-        elif reps == 2:
-            interval = 3
-        else:
-            interval = max(1, round(interval * ease))
-        ease = min(3.0, ease + 0.05)
-
-    next_due = reviewed_at + timedelta(days=interval)
-    flashcard.ease_factor = ease
-    flashcard.repetitions = reps
-    flashcard.interval_days = interval
-    flashcard.due_at = next_due
-    return ReviewOutcome(
-        result=result,
-        scheduled_due_at=scheduled_due,
-        reviewed_at=reviewed_at,
-        next_due_at=next_due,
-        ease_factor_after=ease,
-        interval_days_after=interval,
-        repetitions_after=reps,
-    )
-
-
-def create_flashcard_review(flashcard: Flashcard, outcome: ReviewOutcome) -> FlashcardReview:
-    return FlashcardReview(
-        flashcard=flashcard,
-        result=outcome.result,
-        scheduled_due_at=outcome.scheduled_due_at,
-        reviewed_at=outcome.reviewed_at,
-        next_due_at=outcome.next_due_at,
-        ease_factor_after=outcome.ease_factor_after,
-        interval_days_after=outcome.interval_days_after,
-        repetitions_after=outcome.repetitions_after,
-    )
+    for card in list(lesson.flashcards):
+        if card.id not in matched_ids:
+            session.delete(card)
 
 
 def upsert_youtube_upload(session: Session, lesson: Lesson, upload: GeneratedUpload) -> None:

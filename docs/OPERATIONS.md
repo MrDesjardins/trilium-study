@@ -35,6 +35,20 @@ sudo apt-get update
 sudo apt-get install -y ffmpeg espeak-ng
 ```
 
+## Study Scheduling Configuration
+
+Flashcard review scheduling uses FSRS (the `fsrs` Python package, installed by `uv sync`). Optional `.env` settings:
+
+```bash
+DAILY_REVIEW_GOAL=50        # reviews per day counted toward the goal bar
+DAILY_NEW_CARDS=10          # never-reviewed cards introduced per (local) day
+DESIRED_RETENTION=0.9       # FSRS target retention (0-1)
+FSRS_ENABLE_FUZZING=true    # small random interval spread; disable for deterministic tests
+LEARN_AHEAD_MINUTES=20      # serve learning/relearning steps this early when the queue is empty
+```
+
+Migration `0004_fsrs_scheduling` seeds FSRS state for existing decks by replaying each card's review history; cards with no reviews (or a pre-upgrade deck reset) stay "new" and re-enter through the daily new-card gate. `POST /study/reset` also returns cards to "new".
+
 ## YouTube Auth
 
 Generate the persisted token file with:

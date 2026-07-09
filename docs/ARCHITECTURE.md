@@ -17,7 +17,7 @@ The application persists state in SQLite and stores staged artifacts on disk und
 ## Main Components
 
 - `app/main.py`
-  Server-rendered FastAPI UI, catalog sync, JSON endpoints, polling status APIs, flashcard study queue stats, in-place due-queue reviews via `Accept: application/json` on the review POST, browse/reset study actions, server-side audio-stream queue actions for uploaded YouTube lessons, app bootstrap, and background runner startup. The UI is split into a compact dashboard (`/`) that lists course summary cards with per-state lesson counts, per-course pages (`/courses/{id}`) that hold bulk-generate controls and live lesson cards polled from `/api/courses/{id}`, and lesson detail pages (`/lessons/{id}`), all linked with breadcrumbs. Lesson generation actions redirect back to the referring page. When a catalog restructure promotes a lesson note to a course note, the archived lesson row keeps the generated video and flashcards; the UI re-associates them with the new course at render time by matching `trilium_note_id`, so course cards and course pages show the legacy course video and flashcard count without storing a link that a future sync could invalidate.
+  Server-rendered FastAPI UI, catalog sync, JSON endpoints, polling status APIs, flashcard study queue stats, in-place due-queue reviews via `Accept: application/json` on the review POST, browse/reset study actions, in-review card tools (suspend/unsuspend, edit, delete, undo last review), study analytics (day streak, 30-day true retention, 7-day due forecast, 13-week review heatmap), server-side audio-stream queue actions for uploaded YouTube lessons (per lesson and course-wide via `/courses/{id}/queue-audio-all`, both fetch-based with proper error status codes), app bootstrap, and background runner startup. The study queue serves due review cards first (grouped by lesson), then never-reviewed cards up to a configurable daily new-card cap, then learning/relearning steps slightly early within a learn-ahead window; "today" boundaries use the display timezone. The UI is split into a compact dashboard (`/`) that lists course summary cards with per-state lesson counts, per-course pages (`/courses/{id}`) that hold bulk-generate controls and live lesson cards polled from `/api/courses/{id}`, and lesson detail pages (`/lessons/{id}`), all linked with breadcrumbs. Lesson generation actions redirect back to the referring page. When a catalog restructure promotes a lesson note to a course note, the archived lesson row keeps the generated video and flashcards; the UI re-associates them with the new course at render time by matching `trilium_note_id`, so course cards and course pages show the legacy course video and flashcard count without storing a link that a future sync could invalidate.
 - `app/content.py`
   Trilium ETAPI client plus recursive lesson collection and normalized text assembly, including HTML cleanup and duplicate-block suppression so downstream script generation sees cleaner study material.
 - `app/jobs.py`
@@ -25,7 +25,9 @@ The application persists state in SQLite and stores staged artifacts on disk und
 - `app/status.py`
   Runtime dependency checks, queue position calculation, stage progress modeling, ETA helpers, and generated-script length metadata for the UI.
 - `app/pipeline.py`
-  LLM-backed script validation and expansion with minimum narration-length gates based on cleaned source text, including a looser middle-band floor so study-worthy 8-11 minute scripts are not rejected unnecessarily, comprehension-first prompting that pushes for examples and alternate explanations when needed, plain-spoken narration validation that rejects Markdown-like script output before TTS, multi-attempt in-stage script retries that escalate to section-by-section teaching requirements before the lesson job fails, flashcard generation, Kokoro TTS integration, ffmpeg rendering sized to narration duration, YouTube upload integration, and SM-2 review scheduling.
+  LLM-backed script validation and expansion with minimum narration-length gates based on cleaned source text, including a looser middle-band floor so study-worthy 8-11 minute scripts are not rejected unnecessarily, comprehension-first prompting that pushes for examples and alternate explanations when needed, plain-spoken narration validation that rejects Markdown-like script output before TTS, multi-attempt in-stage script retries that escalate to section-by-section teaching requirements before the lesson job fails, flashcard generation with an atomic-card prompt policy and length-scaled card counts, history-preserving flashcard regeneration (`sync_flashcards` matches regenerated cards to existing ones by normalized prompt so scheduling state and review history survive), Kokoro TTS integration, ffmpeg rendering sized to narration duration, and YouTube upload integration.
+- `app/srs.py`
+  FSRS spaced-repetition scheduling (via the `fsrs` package): grade-to-rating mapping for the four review grades, per-review FSRS state updates with before/after card snapshots stored on each review row, undo of the most recent review from its snapshot (refused across deck resets), and migration-time seeding that replays each card's review history through the scheduler.
 - `app/models.py`
   SQLAlchemy schema for courses, lessons, artifacts, jobs, job events, uploads, flashcards, and reviews.
 - `app/migrate.py` and `migrations/`
@@ -48,8 +50,8 @@ SQLite stores:
 - lesson stage state and errors
 - job execution history
 - upload metadata
-- flashcards and review history
-- flashcard scheduling state that can be reset without deleting historical review rows
+- flashcards and review history (each review row stores the FSRS card state before and after, enabling undo and retention analytics)
+- FSRS scheduling state per flashcard (stability, difficulty, state, step; NULL stability marks a never-reviewed "new" card) that can be reset without deleting historical review rows
 - Alembic also tracks schema version state via `alembic_version`.
 
 Disk artifacts store:

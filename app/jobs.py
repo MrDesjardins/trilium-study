@@ -23,8 +23,8 @@ from app.pipeline import (
     FfmpegVideoRenderer,
     YouTubeApiPublisher,
     ensure_artifact,
-    replace_flashcards,
     should_skip_stage,
+    sync_flashcards,
     upsert_youtube_upload,
 )
 from app.storage import artifact_path, hashed_filename
@@ -285,7 +285,7 @@ class JobRunner:
                             self._event(session, job, "stage_skipped", "Flashcards reused", stage=stage)
                         else:
                             cards = services.flashcard_generator.generate(lesson.title, lesson.flashcard_source_text or lesson.script_text or "")
-                            replace_flashcards(session, lesson, cards)
+                            sync_flashcards(session, lesson, cards)
                             flash_path = artifact_path(
                                 self.settings.workspace_path, course, lesson, "flashcards", hashed_filename("flashcards", lesson.content_hash, "json")
                             )

@@ -12,8 +12,13 @@ The repository currently verifies:
 - multi-attempt in-stage script escalation before a lesson pipeline retry is consumed
 - minimum script-length gating for content-rich lessons using cleaned source text
 - reduced middle-band script floors so valid study-length scripts are not rejected on narrow misses
-- flashcard review scheduling behavior
+- FSRS review scheduling behavior (grade mapping, learning steps, deterministic fuzz-off scheduling, review snapshots, history-replay seeding, undo restore and refusal paths) in `tests/test_srs.py`
+- flashcard generation prompt policy, length-scaled card counts, and history-preserving regeneration matching
 - study queue stats, browse mode, and reset behavior
+- daily new-card limits, review-tier priority, and the Los Angeles day boundary for "today" stats
+- in-review card tools (suspend, unsuspend, edit, delete, undo) over JSON and redirect paths
+- study analytics payload (streak, retention, forecast, heatmap) rendering
+- audio-queue JSON responses for single lessons and course-wide bulk queueing
 - ffmpeg renderer duration alignment
 - durable lesson job success path
 - durable lesson job failure path

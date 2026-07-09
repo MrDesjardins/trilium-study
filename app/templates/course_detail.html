@@ -48,6 +48,15 @@
     <button type="submit">Generate From Last Done Selected</button>
     <button type="submit" name="force_regenerate" value="true">Force Generate All Selected</button>
   </form>
+  {% set queueable_lessons = lessons|selectattr("youtube_upload")|list %}
+  <form
+    method="post"
+    action="/courses/{{ course.id }}/queue-audio-all"
+    class="bulk-controls course-audio-queue-form {% if not queueable_lessons %}hidden{% endif %}"
+    data-audio-queue-all-form
+  >
+    <button type="submit" class="secondary-button">Queue all YouTube audio ({{ queueable_lessons|length }})</button>
+  </form>
 </section>
 
 <section class="lesson-grid">
@@ -242,4 +251,5 @@
     setInterval(refreshCourseStatus, 4000);
   });
 </script>
+<script src="/static/audio-queue.js"></script>
 {% endblock %}

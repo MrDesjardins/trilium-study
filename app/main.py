@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import json
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import case, func, select
@@ -29,8 +29,14 @@ from app.pipeline import (
     DefaultScriptGenerator,
     FfmpegVideoRenderer,
     YouTubeApiPublisher,
+)
+from app.srs import (
+    apply_review,
+    build_scheduler,
     create_flashcard_review,
-    schedule_flashcard_review,
+    study_class_expr,
+    undo_last_review,
+    utc_datetime,
 )
 from app.status import lesson_status_payload, queue_positions, runtime_checks
 
@@ -48,6 +54,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     bootstrap_database(settings)
     templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
     display_timezone = ZoneInfo("America/Los_Angeles")
+    scheduler = build_scheduler(settings)
 
     def local_datetime(value: datetime | None) -> str:
         if value is None:
@@ -168,8 +175,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         response.set_cookie("flash_message", message, max_age=60, httponly=True, samesite="lax")
         return response
 
-    study_class_expr = func.coalesce(Course.class_title, Course.title)
-
     def scoped_flashcards(stmt, class_title: str | None):
         if class_title:
             stmt = (
@@ -179,12 +184,47 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         return stmt
 
+    def local_day_start(now: datetime) -> datetime:
+        return (
+            now.astimezone(display_timezone)
+            .replace(hour=0, minute=0, second=0, microsecond=0)
+            .astimezone(timezone.utc)
+        )
+
+    def new_cards_introduced_today(session: Session, now: datetime) -> int:
+        # Joining on the card and requiring it to still be scheduled means a
+        # deck reset (which nulls stability) refreshes today's allowance.
+        day_start = local_day_start(now)
+        return (
+            session.scalar(
+                select(func.count())
+                .select_from(FlashcardReview)
+                .join(Flashcard, Flashcard.id == FlashcardReview.flashcard_id)
+                .where(
+                    FlashcardReview.state_before == "new",
+                    FlashcardReview.reviewed_at >= day_start,
+                    Flashcard.stability.is_not(None),
+                )
+            )
+            or 0
+        )
+
+    def new_card_allowance(session: Session, now: datetime, new_today: int | None = None) -> tuple[int, int]:
+        """Return (new_today, remaining allowance) under the daily new-card cap."""
+        if new_today is None:
+            new_today = new_cards_introduced_today(session, now)
+        return new_today, max(0, max(0, settings.daily_new_cards) - new_today)
+
+    learn_ahead = timedelta(minutes=max(0, settings.learn_ahead_minutes))
+    learning_states = Flashcard.fsrs_state.in_(["learning", "relearning"])
+
     def study_class_options(session: Session, now: datetime) -> list[dict]:
         rows = session.execute(
             select(
                 study_class_expr.label("class_title"),
                 func.count(Flashcard.id),
-                func.sum(case((Flashcard.due_at <= now, 1), else_=0)),
+                func.sum(case(((Flashcard.due_at <= now) & Flashcard.stability.is_not(None), 1), else_=0)),
+                func.sum(case((Flashcard.stability.is_(None), 1), else_=0)),
             )
             .select_from(Flashcard)
             .join(Lesson, Lesson.id == Flashcard.lesson_id)
@@ -193,18 +233,45 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             .group_by(study_class_expr)
             .order_by(study_class_expr)
         ).all()
-        return [{"class_title": title, "total": total, "due": due or 0} for title, total, due in rows]
+        return [
+            {"class_title": title, "total": total, "due": due or 0, "new": new or 0}
+            for title, total, due, new in rows
+        ]
 
-    def study_stats_payload(session: Session, now: datetime, class_title: str | None = None) -> dict[str, int]:
+    def study_stats_payload(
+        session: Session, now: datetime, class_title: str | None = None, new_today: int | None = None
+    ) -> dict:
         active_cards = Flashcard.suspended.is_(False)
-        day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        day_start = local_day_start(now)
         total_cards = session.scalar(scoped_flashcards(select(func.count()).select_from(Flashcard), class_title).where(active_cards)) or 0
-        due_count = (
+        review_due = (
             session.scalar(
-                scoped_flashcards(select(func.count()).select_from(Flashcard), class_title).where(active_cards, Flashcard.due_at <= now)
+                scoped_flashcards(select(func.count()).select_from(Flashcard), class_title).where(
+                    active_cards, Flashcard.due_at <= now, Flashcard.stability.is_not(None)
+                )
             )
             or 0
         )
+        new_available = (
+            session.scalar(
+                scoped_flashcards(select(func.count()).select_from(Flashcard), class_title).where(
+                    active_cards, Flashcard.stability.is_(None)
+                )
+            )
+            or 0
+        )
+        new_today, new_allowance = new_card_allowance(session, now, new_today)
+        new_remaining = min(new_available, new_allowance)
+        due_count = review_due + new_remaining
+
+        next_scheduled_due = session.scalar(
+            scoped_flashcards(select(func.min(Flashcard.due_at)), class_title).where(
+                active_cards, Flashcard.stability.is_not(None), Flashcard.due_at > now
+            )
+        )
+        next_due_seconds = None
+        if next_scheduled_due is not None:
+            next_due_seconds = max(0, int((utc_datetime(next_scheduled_due) - now).total_seconds()))
 
         def review_count(*extra_clauses) -> int:
             stmt = (
@@ -226,31 +293,55 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "failed_today": review_count(FlashcardReview.result == "again"),
             "daily_goal": daily_goal,
             "goal_reached": reviewed_today >= daily_goal,
+            "new_today": new_today,
+            "daily_new_cards": max(0, settings.daily_new_cards),
+            "new_remaining": new_remaining,
+            "next_due_seconds": next_due_seconds,
         }
 
     def ordered_flashcards(session: Session, class_title: str | None = None) -> list[Flashcard]:
         stmt = scoped_flashcards(select(Flashcard), class_title).where(Flashcard.suspended.is_(False))
         return session.scalars(stmt.order_by(Flashcard.due_at.asc(), Flashcard.id.asc())).all()
 
-    def next_due_flashcard(session: Session, now: datetime, class_title: str | None = None) -> Flashcard | None:
+    def next_due_flashcard(
+        session: Session, now: datetime, class_title: str | None = None, new_today: int | None = None
+    ) -> Flashcard | None:
         # Serve the queue lesson by lesson (oldest backlog first) so a study
         # session stays on one topic instead of hopping between lessons.
-        lesson_backlog = (
-            select(Flashcard.lesson_id, func.min(Flashcard.due_at).label("lesson_due"))
-            .where(Flashcard.suspended.is_(False), Flashcard.due_at <= now)
-            .group_by(Flashcard.lesson_id)
-            .subquery()
-        )
-        stmt = (
-            scoped_flashcards(select(Flashcard), class_title)
-            .join(lesson_backlog, lesson_backlog.c.lesson_id == Flashcard.lesson_id)
-            .where(Flashcard.suspended.is_(False), Flashcard.due_at <= now)
-            .order_by(lesson_backlog.c.lesson_due.asc(), Flashcard.lesson_id.asc(), Flashcard.due_at.asc(), Flashcard.id.asc())
-        )
-        return session.scalar(stmt)
+        def lesson_grouped(extra_where, backlog_key) -> Flashcard | None:
+            lesson_backlog = (
+                select(Flashcard.lesson_id, func.min(backlog_key).label("lesson_due"))
+                .where(Flashcard.suspended.is_(False), *extra_where)
+                .group_by(Flashcard.lesson_id)
+                .subquery()
+            )
+            stmt = (
+                scoped_flashcards(select(Flashcard), class_title)
+                .join(lesson_backlog, lesson_backlog.c.lesson_id == Flashcard.lesson_id)
+                .where(Flashcard.suspended.is_(False), *extra_where)
+                .order_by(lesson_backlog.c.lesson_due.asc(), Flashcard.lesson_id.asc(), Flashcard.due_at.asc(), Flashcard.id.asc())
+            )
+            return session.scalar(stmt)
 
-    def utc_datetime(value: datetime) -> datetime:
-        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        review_card = lesson_grouped(
+            (Flashcard.due_at <= now, Flashcard.stability.is_not(None)), Flashcard.due_at
+        )
+        if review_card is not None:
+            return review_card
+
+        _, allowance = new_card_allowance(session, now, new_today)
+        if allowance > 0:
+            new_card = lesson_grouped((Flashcard.stability.is_(None),), Flashcard.id)
+            if new_card is not None:
+                return new_card
+
+        # Learn-ahead: with nothing else to do, serve learning/relearning steps
+        # a little early instead of stranding them minutes away.
+        if learn_ahead > timedelta(0):
+            return lesson_grouped(
+                (Flashcard.due_at <= now + learn_ahead, learning_states), Flashcard.due_at
+            )
+        return None
 
     def study_flashcard_payload(flashcard: Flashcard | None) -> dict | None:
         if flashcard is None:
@@ -267,6 +358,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "lesson_title": flashcard.lesson.title if flashcard.lesson else None,
             "trilium_note_url": trilium_note_url,
             "review_url": f"/study/{flashcard.id}/review",
+            "suspend_url": f"/study/{flashcard.id}/suspend",
+            "unsuspend_url": f"/study/{flashcard.id}/unsuspend",
+            "edit_url": f"/study/{flashcard.id}/edit",
+            "delete_url": f"/study/{flashcard.id}/delete",
+            "suspended": flashcard.suspended,
         }
 
     def browse_payload(cards: list[Flashcard], current_id: int | None = None) -> dict | None:
@@ -300,6 +396,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         flash_message: str | None,
         class_options: list[dict],
         selected_class: str | None,
+        analytics: dict,
     ) -> HTMLResponse:
         trilium_note_url = None
         if flashcard and flashcard.lesson:
@@ -321,6 +418,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "class_options": class_options,
                 "selected_class": selected_class,
                 "class_query": class_query,
+                "analytics": analytics,
             },
         )
         if flash_message:
@@ -328,9 +426,103 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             response.delete_cookie("flash_message")
         return response
 
+    def study_analytics_payload(session: Session, now: datetime) -> dict:
+        today_local = now.astimezone(display_timezone).date()
+
+        def review_counts_between(start_utc: datetime, end_utc: datetime | None = None) -> dict[date, int]:
+            stmt = select(FlashcardReview.reviewed_at).where(FlashcardReview.reviewed_at >= start_utc)
+            if end_utc is not None:
+                stmt = stmt.where(FlashcardReview.reviewed_at < end_utc)
+            counts: dict[date, int] = {}
+            for ts in session.scalars(stmt):
+                day = utc_datetime(ts).astimezone(display_timezone).date()
+                counts[day] = counts.get(day, 0) + 1
+            return counts
+
+        # One 91-day window feeds both the heatmap and the streak; the streak
+        # only fetches further windows when it actually extends past this one.
+        heatmap_start_local = today_local - timedelta(days=90)
+        heatmap_start_utc = local_day_start(now) - timedelta(days=90)
+        day_counts = review_counts_between(heatmap_start_utc)
+        heatmap_counts = dict(day_counts)
+        fetched_start_local = heatmap_start_local
+        fetched_start_utc = heatmap_start_utc
+
+        def count_for(day: date) -> int:
+            nonlocal fetched_start_local, fetched_start_utc
+            while day < fetched_start_local:
+                older_start_utc = fetched_start_utc - timedelta(days=91)
+                day_counts.update(review_counts_between(older_start_utc, fetched_start_utc))
+                fetched_start_utc = older_start_utc
+                fetched_start_local -= timedelta(days=91)
+            return day_counts.get(day, 0)
+
+        cursor = today_local if count_for(today_local) else today_local - timedelta(days=1)
+        streak = 0
+        while count_for(cursor):
+            streak += 1
+            cursor -= timedelta(days=1)
+
+        retention_window_start = now - timedelta(days=30)
+        review_results = session.scalars(
+            select(FlashcardReview.result).where(
+                FlashcardReview.state_before == "review", FlashcardReview.reviewed_at >= retention_window_start
+            )
+        ).all()
+        retention_total = len(review_results)
+        retention_percent = (
+            round(100 * (1 - sum(1 for result in review_results if result == "again") / retention_total))
+            if retention_total
+            else None
+        )
+
+        forecast_buckets = {today_local + timedelta(days=offset): 0 for offset in range(1, 8)}
+        upcoming_due = session.scalars(
+            select(Flashcard.due_at).where(
+                Flashcard.suspended.is_(False),
+                Flashcard.stability.is_not(None),
+                Flashcard.due_at > now,
+                Flashcard.due_at < now + timedelta(days=9),
+            )
+        ).all()
+        for due_at in upcoming_due:
+            due_date = utc_datetime(due_at).astimezone(display_timezone).date()
+            if due_date in forecast_buckets:
+                forecast_buckets[due_date] += 1
+        forecast = [
+            {"label": day.strftime("%a"), "date": day.isoformat(), "count": count}
+            for day, count in sorted(forecast_buckets.items())
+        ]
+
+        def heat_level(count: int) -> int:
+            if count == 0:
+                return 0
+            if count < 5:
+                return 1
+            if count < 15:
+                return 2
+            if count < 30:
+                return 3
+            return 4
+
+        heatmap = []
+        day = heatmap_start_local
+        while day <= today_local:
+            count = heatmap_counts.get(day, 0)
+            heatmap.append({"date": day.isoformat(), "count": count, "level": heat_level(count)})
+            day += timedelta(days=1)
+
+        return {
+            "streak": streak,
+            "retention_percent": retention_percent,
+            "forecast": forecast,
+            "heatmap": heatmap,
+        }
+
     def study_review_payload(session: Session, now: datetime, class_title: str | None = None) -> dict:
-        stats = study_stats_payload(session, now, class_title)
-        next_card = next_due_flashcard(session, now, class_title)
+        new_today = new_cards_introduced_today(session, now)
+        stats = study_stats_payload(session, now, class_title, new_today=new_today)
+        next_card = next_due_flashcard(session, now, class_title, new_today=new_today)
         return {
             "stats": stats,
             "flashcard": study_flashcard_payload(next_card),
@@ -520,8 +712,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         stats = study_stats_payload(db, now, selected_class)
         flashcard = next_due_flashcard(db, now, selected_class)
         class_options = study_class_options(db, now)
+        analytics = study_analytics_payload(db, now)
         return study_response(
-            request, flashcard, stats, None, True, flash_level, flash_message, class_options, selected_class
+            request, flashcard, stats, None, True, flash_level, flash_message, class_options, selected_class, analytics
         )
 
     @app.get("/study/browse", response_class=HTMLResponse)
@@ -534,8 +727,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         state = browse_payload(ordered_flashcards(db, selected_class), flashcard_id)
         flashcard = state["flashcard"] if state else None
         class_options = study_class_options(db, now)
+        analytics = study_analytics_payload(db, now)
         return study_response(
-            request, flashcard, stats, state, False, flash_level, flash_message, class_options, selected_class
+            request, flashcard, stats, state, False, flash_level, flash_message, class_options, selected_class, analytics
         )
 
     @app.post("/study/{flashcard_id}/review")
@@ -552,12 +746,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if flashcard is None:
             raise HTTPException(status_code=404, detail="Flashcard not found")
         now = datetime.now(timezone.utc)
-        if flashcard.suspended or utc_datetime(flashcard.due_at) > now:
+        is_new = flashcard.stability is None
+        _, allowance = new_card_allowance(db, now)
+        new_allowance_exhausted = is_new and allowance <= 0
+        # Learning/relearning steps may be graded a little early (learn-ahead).
+        # Because those steps are minutes long — shorter than the learn-ahead
+        # window itself — a card's due_at stays inside the horizon right after
+        # it's graded, so the horizon alone can't catch a double-submit; also
+        # require this card not to have just been reviewed a moment ago.
+        due_horizon = now + learn_ahead if flashcard.fsrs_state in {"learning", "relearning"} else now
+        just_reviewed = flashcard.last_reviewed_at is not None and now - utc_datetime(flashcard.last_reviewed_at) < timedelta(
+            seconds=5
+        )
+        if (
+            flashcard.suspended
+            or (not is_new and utc_datetime(flashcard.due_at) > due_horizon)
+            or new_allowance_exhausted
+            or just_reviewed
+        ):
             if "application/json" in request.headers.get("accept", ""):
                 return study_review_payload(db, now, selected_class)
             return redirect_with_flash(study_url, "That card was already reviewed.", "info")
         grade = result if result in {"again", "hard", "pass", "easy"} else "again"
-        outcome = schedule_flashcard_review(flashcard, grade)
+        outcome = apply_review(scheduler, flashcard, grade, now)
         review = create_flashcard_review(flashcard, outcome)
         db.add(review)
         db.commit()
@@ -580,9 +791,126 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             flashcard.repetitions = 0
             flashcard.due_at = now
             flashcard.suspended = False
+            flashcard.stability = None
+            flashcard.difficulty = None
+            flashcard.fsrs_state = None
+            flashcard.fsrs_step = None
+            flashcard.last_reviewed_at = None
         db.commit()
         scope_note = f" in {selected_class}" if selected_class else ""
-        return redirect_with_flash(study_url, f"Reset {len(flashcards)} flashcard(s){scope_note} for a fresh study pass.")
+        return redirect_with_flash(
+            study_url,
+            f"Reset {len(flashcards)} flashcard(s){scope_note}. They'll re-enter as new cards, "
+            f"limited to {max(0, settings.daily_new_cards)} per day.",
+        )
+
+    def tool_response(
+        request: Request,
+        db: Session,
+        study_url: str,
+        selected_class: str | None,
+        message: str,
+        level: str = "info",
+    ):
+        if "application/json" in request.headers.get("accept", ""):
+            now = datetime.now(timezone.utc)
+            payload = study_review_payload(db, now, selected_class)
+            payload["message"] = message
+            payload["level"] = level
+            return payload
+        return redirect_with_flash(study_url, message, level)
+
+    @app.post("/study/{flashcard_id}/suspend")
+    async def suspend_flashcard(
+        request: Request,
+        flashcard_id: int,
+        class_title: str = Form(default=""),
+        db: Session = Depends(get_db),
+    ):
+        selected_class = class_title.strip() or None
+        study_url = f"/study{study_class_query(selected_class)}"
+        flashcard = db.get(Flashcard, flashcard_id)
+        if flashcard is None:
+            raise HTTPException(status_code=404, detail="Flashcard not found")
+        flashcard.suspended = True
+        db.commit()
+        return tool_response(request, db, study_url, selected_class, "Card suspended.")
+
+    @app.post("/study/{flashcard_id}/unsuspend")
+    async def unsuspend_flashcard(
+        request: Request,
+        flashcard_id: int,
+        class_title: str = Form(default=""),
+        db: Session = Depends(get_db),
+    ):
+        selected_class = class_title.strip() or None
+        study_url = f"/study{study_class_query(selected_class)}"
+        flashcard = db.get(Flashcard, flashcard_id)
+        if flashcard is None:
+            raise HTTPException(status_code=404, detail="Flashcard not found")
+        flashcard.suspended = False
+        db.commit()
+        return tool_response(request, db, study_url, selected_class, "Card unsuspended.")
+
+    @app.post("/study/{flashcard_id}/edit")
+    async def edit_flashcard(
+        request: Request,
+        flashcard_id: int,
+        prompt: str = Form(),
+        answer: str = Form(),
+        class_title: str = Form(default=""),
+        db: Session = Depends(get_db),
+    ):
+        selected_class = class_title.strip() or None
+        study_url = f"/study{study_class_query(selected_class)}"
+        flashcard = db.get(Flashcard, flashcard_id)
+        if flashcard is None:
+            raise HTTPException(status_code=404, detail="Flashcard not found")
+        prompt = prompt.strip()
+        answer = answer.strip()
+        if not prompt or not answer:
+            return tool_response(request, db, study_url, selected_class, "Prompt and answer cannot be empty.", "error")
+        flashcard.prompt = prompt
+        flashcard.answer = answer
+        db.commit()
+        return tool_response(request, db, study_url, selected_class, "Card updated.")
+
+    @app.post("/study/{flashcard_id}/delete")
+    async def delete_flashcard(
+        request: Request,
+        flashcard_id: int,
+        class_title: str = Form(default=""),
+        db: Session = Depends(get_db),
+    ):
+        selected_class = class_title.strip() or None
+        study_url = f"/study{study_class_query(selected_class)}"
+        flashcard = db.get(Flashcard, flashcard_id)
+        if flashcard is None:
+            raise HTTPException(status_code=404, detail="Flashcard not found")
+        db.delete(flashcard)
+        db.commit()
+        return tool_response(request, db, study_url, selected_class, "Card deleted.")
+
+    @app.post("/study/undo")
+    async def undo_review(
+        request: Request,
+        class_title: str = Form(default=""),
+        db: Session = Depends(get_db),
+    ):
+        selected_class = class_title.strip() or None
+        study_url = f"/study{study_class_query(selected_class)}"
+        restored, error = undo_last_review(db, selected_class)
+        if error:
+            return tool_response(request, db, study_url, selected_class, error, "error")
+        db.commit()
+        if "application/json" in request.headers.get("accept", ""):
+            now = datetime.now(timezone.utc)
+            payload = study_review_payload(db, now, selected_class)
+            payload["flashcard"] = study_flashcard_payload(restored)
+            payload["message"] = "Last review undone."
+            payload["level"] = "info"
+            return payload
+        return redirect_with_flash(study_url, "Last review undone.")
 
     @app.get("/api/lessons/{lesson_id}")
     async def lesson_api(lesson_id: int, db: Session = Depends(get_db)):
@@ -595,6 +923,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def healthz():
         return {"ok": True}
 
+    def api_or_redirect(
+        request: Request, redirect_url: str, message: str, level: str = "info", status_code: int = 200
+    ):
+        if "application/json" in request.headers.get("accept", ""):
+            return JSONResponse({"level": level, "message": message}, status_code=status_code)
+        return redirect_with_flash(redirect_url, message, level)
+
     @app.post("/lessons/{lesson_id}/queue-audio")
     async def queue_audio_lesson(lesson_id: int, request: Request, db: Session = Depends(get_db)):
         lesson = db.get(Lesson, lesson_id)
@@ -603,15 +938,54 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         redirect_url = request.headers.get("referer") or "/"
         youtube_url = lesson.youtube_upload.video_url if lesson.youtube_upload else None
         if not youtube_url:
-            return redirect_with_flash(redirect_url, f"{lesson.title} does not have a YouTube upload yet.", level="error")
+            return api_or_redirect(
+                request, redirect_url, f"{lesson.title} does not have a YouTube upload yet.", "error", status_code=409
+            )
         try:
             await enqueue_audio_stream(settings.audio_queue_url, youtube_url)
         except httpx.HTTPStatusError as exc:
             detail = exc.response.text.strip() or f"HTTP {exc.response.status_code}"
-            return redirect_with_flash(redirect_url, f"Audio queue rejected {lesson.title}: {detail}", level="error")
+            return api_or_redirect(
+                request, redirect_url, f"Audio queue rejected {lesson.title}: {detail}", "error", status_code=502
+            )
         except httpx.HTTPError as exc:
-            return redirect_with_flash(redirect_url, f"Audio queue is unavailable for {lesson.title}: {exc}", level="error")
-        return redirect_with_flash(redirect_url, f"Queued {lesson.title} for the audio YouTube stream.")
+            return api_or_redirect(
+                request, redirect_url, f"Audio queue is unavailable for {lesson.title}: {exc}", "error", status_code=503
+            )
+        return api_or_redirect(request, redirect_url, f"Queued {lesson.title} for the audio YouTube stream.")
+
+    @app.post("/courses/{course_id}/queue-audio-all")
+    async def queue_audio_all(course_id: int, request: Request, db: Session = Depends(get_db)):
+        course = db.get(Course, course_id)
+        if course is None or course.archived_at is not None:
+            raise HTTPException(status_code=404, detail="Course not found")
+        redirect_url = request.headers.get("referer") or f"/courses/{course_id}"
+        lessons = db.scalars(active_lessons_query(course.id)).all()
+        queueable = [lesson for lesson in lessons if lesson.youtube_upload]
+        if not queueable:
+            return api_or_redirect(
+                request, redirect_url, "No lessons in this course have a YouTube upload yet.", "error", status_code=409
+            )
+        queued = 0
+        failures: list[str] = []
+        for lesson in queueable:
+            try:
+                await enqueue_audio_stream(settings.audio_queue_url, lesson.youtube_upload.video_url)
+                queued += 1
+            except httpx.HTTPStatusError as exc:
+                detail = exc.response.text.strip() or f"HTTP {exc.response.status_code}"
+                failures.append(f"{lesson.title} ({detail})")
+            except httpx.HTTPError as exc:
+                failures.append(f"{lesson.title} ({exc})")
+        if failures:
+            level = "error" if queued == 0 else "info"
+            status_code = 502 if queued == 0 else 200
+            message = f"Queued {queued} of {len(queueable)} lesson(s). Failed: {', '.join(failures)}"
+        else:
+            level = "info"
+            status_code = 200
+            message = f"Queued {queued} lesson(s) for the audio YouTube stream."
+        return api_or_redirect(request, redirect_url, message, level, status_code=status_code)
 
     return app
 
