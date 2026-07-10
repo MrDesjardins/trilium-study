@@ -854,6 +854,11 @@ button:hover { transform: translateY(-1px); }
   gap: 10px;
   flex-wrap: wrap;
   margin-top: 10px;
+  /* The grade buttons below have a decorative glow that bleeds 7px past
+     their own box (.study-review-btn::before, inset: -7px); without this
+     gap it paints over the bottom of these buttons since later DOM
+     elements win when boxes touch. */
+  margin-bottom: 18px;
 }
 .study-edit-panel,
 .study-delete-confirm {
