@@ -462,10 +462,18 @@
       syncReviewButtons();
     };
 
-    const submitReview = async (result) => {
+    const CELEBRATION_MS = 850;
+
+    // minCelebrationMs > 0 means: keep showing the just-graded card (with the
+    // victory burst playing over it) for at least this long, and only clear
+    // it for the next card once that time AND the network request have both
+    // finished -- so the swap is always [current card] -> [next card], never
+    // [current card] -> [blank/stale] -> [next card].
+    const submitReview = async (result, minCelebrationMs = 0) => {
       if (submitting) return;
       submitting = true;
-      if (!celebrating) {
+      const startedAt = performance.now();
+      if (!minCelebrationMs) {
         clearFlashcardContent();
         resetFlashcardFace(true);
       }
@@ -475,13 +483,27 @@
         const body = new FormData();
         body.set("result", result);
         body.set("class_title", form.querySelector('[name="class_title"]')?.value || "");
-        const response = await fetch(form.action, {
+        const fetchPromise = fetch(form.action, {
           method: "POST",
           headers: { Accept: "application/json" },
           body,
         });
+        let response;
+        if (minCelebrationMs) {
+          const minWait = new Promise((resolve) => {
+            const elapsed = performance.now() - startedAt;
+            window.setTimeout(resolve, Math.max(0, minCelebrationMs - elapsed));
+          });
+          [response] = await Promise.all([fetchPromise, minWait]);
+        } else {
+          response = await fetchPromise;
+        }
         if (!response.ok) {
           throw new Error(`Review failed (${response.status})`);
+        }
+        if (minCelebrationMs) {
+          clearFlashcardContent();
+          resetFlashcardFace(true);
         }
         const payload = await response.json();
         updateStats(payload.stats);
@@ -510,16 +532,13 @@
       if (submitting || reviewLocked || !flashcardEl?.classList.contains("flipped")) return;
       reviewLocked = true;
       syncReviewButtons();
-      if ((result === "pass" || result === "easy") && shell && burst && !celebrating) {
+      const celebrate = (result === "pass" || result === "easy") && Boolean(shell) && Boolean(burst) && !celebrating;
+      if (celebrate) {
         celebrating = true;
         shell.classList.add("victory-mode");
         burst.classList.remove("hidden");
-        window.setTimeout(() => {
-          submitReview(result);
-        }, 850);
-        return;
       }
-      submitReview(result);
+      submitReview(result, celebrate ? CELEBRATION_MS : 0);
     };
 
     form.addEventListener("submit", (event) => {
