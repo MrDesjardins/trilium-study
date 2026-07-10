@@ -328,18 +328,24 @@
       }
     };
 
-    const resetFlashcardFace = (instant = false) => {
+    // instant=true un-flips without animating. It hides the card outright
+    // (rather than only disabling the transition) while it un-flips and
+    // whileHidden runs, so no half-finished 3D flip or stale content can
+    // ever be visible even if a browser doesn't honor an instant transition
+    // change perfectly.
+    const resetFlashcardFace = (instant = false, whileHidden) => {
       if (!flashcardEl) return;
       if (!instant) {
         flashcardEl.classList.remove("flipped");
         syncReviewButtons();
         return;
       }
-      const priorTransition = flashcardEl.style.transition;
-      flashcardEl.style.transition = "none";
-      flashcardEl.classList.remove("flipped");
+      flashcardEl.classList.add("swapping");
       void flashcardEl.offsetWidth;
-      flashcardEl.style.transition = priorTransition;
+      flashcardEl.classList.remove("flipped");
+      if (whileHidden) whileHidden();
+      void flashcardEl.offsetWidth;
+      flashcardEl.classList.remove("swapping");
       syncReviewButtons();
     };
 
@@ -417,6 +423,7 @@
         }
         setHidden(emptyActions, totalCards === 0);
         scheduleNextDueRefresh();
+        resetCelebration();
         return;
       }
 
@@ -428,12 +435,6 @@
       if (lessonBadge && lessonBadgeTitle) {
         lessonBadgeTitle.textContent = card.lesson_title || "";
         setHidden(lessonBadge, !card.lesson_title);
-      }
-      if (prompt) prompt.textContent = card.prompt;
-      if (answer) answer.textContent = card.answer;
-      if (excerpt) {
-        excerpt.textContent = card.source_excerpt || "";
-        setHidden(excerpt, !card.source_excerpt);
       }
       if (lessonLink) lessonLink.href = `/lessons/${card.lesson_id}`;
       if (triliumLink) {
@@ -457,7 +458,16 @@
       const editAnswer = document.querySelector("[data-edit-answer]");
       if (editPrompt) editPrompt.value = card.prompt;
       if (editAnswer) editAnswer.value = card.answer;
-      resetFlashcardFace(true);
+      // Set the visible prompt/answer/excerpt while the card is hidden, so
+      // the un-flip and the content swap land in the same invisible instant.
+      resetFlashcardFace(true, () => {
+        if (prompt) prompt.textContent = card.prompt;
+        if (answer) answer.textContent = card.answer;
+        if (excerpt) {
+          excerpt.textContent = card.source_excerpt || "";
+          setHidden(excerpt, !card.source_excerpt);
+        }
+      });
       resetCelebration();
       syncReviewButtons();
     };

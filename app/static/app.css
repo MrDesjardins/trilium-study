@@ -683,6 +683,14 @@ button:hover { transform: translateY(-1px); }
 }
 
 .flashcard.flipped { transform: rotateY(180deg); }
+.flashcard.swapping {
+  /* Used while we un-flip and swap in new content between cards: hides the
+     card outright rather than relying on a transition-cancel trick, so no
+     stale content or half-finished 3D flip can ever be visible even if a
+     browser doesn't honor the instant transition disable perfectly. */
+  transition: none;
+  visibility: hidden;
+}
 .flashcard-face {
   position: absolute;
   inset: 0;
